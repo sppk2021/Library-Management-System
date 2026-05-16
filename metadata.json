@@ -1,0 +1,8 @@
+{
+  "name": "Centralized Library Management System",
+  "description": "A comprehensive web-based library management system for students, librarians, and admins with book tracking, borrowing, and reporting.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
