@@ -11,7 +11,9 @@ import Database from 'better-sqlite3';
 import { eq, and, or, like, sql, desc, asc, inArray } from 'drizzle-orm';
 import * as schema from './src/db/librarydb.ts';
 
-const sqlite = new Database('library.db');
+// On Vercel, the file system is read-only except for /tmp
+const dbPath = process.env.VERCEL ? '/tmp/library.db' : 'library.db';
+const sqlite = new Database(dbPath);
 const db = drizzle(sqlite, { schema });
 
 // Initialize database (run migrations or create tables)
@@ -1004,9 +1006,13 @@ async function startServer() {
     app.get('*', (req, res) => res.sendFile(path.join(distPath, 'index.html')));
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
+  if (!process.env.VERCEL) {
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+    });
+  }
+  return app;
 }
 
-startServer();
+// We can export the app promise for Vercel
+export default startServer();
