@@ -1,15 +1,15 @@
-import { sqliteTable, text, integer, real } from 'drizzle-orm/sqlite-core';
+import { mysqlTable, varchar, int, bigint, real, boolean, json, text } from 'drizzle-orm/mysql-core';
 import { relations } from 'drizzle-orm';
 
-export const users = sqliteTable('users', {
-  id: integer('user_id').primaryKey({ autoIncrement: true }),
-  fullName: text('full_name').notNull(),
-  email: text('email').notNull().unique(),
-  password: text('password').notNull(),
-  role: text('role', { enum: ['student', 'librarian', 'admin'] }).notNull(),
-  phone: text('phone'),
+export const users = mysqlTable('users', {
+  id: int('user_id').primaryKey().autoincrement(),
+  fullName: varchar('full_name', { length: 255 }).notNull(),
+  email: varchar('email', { length: 255 }).notNull().unique(),
+  password: varchar('password', { length: 255 }).notNull(),
+  role: varchar('role', { enum: ['student', 'librarian', 'admin'], length: 50 }).notNull(),
+  phone: varchar('phone', { length: 50 }),
   communicationPreferences: text('communication_preferences'), // JSON: { email: boolean, sms: boolean }
-  createdAt: integer('created_at', { mode: 'timestamp' }).default(new Date()),
+  createdAt: bigint('created_at', { mode: 'number' }),
 });
 
 export const usersRelations = relations(users, ({ one, many }) => ({
@@ -25,12 +25,12 @@ export const usersRelations = relations(users, ({ one, many }) => ({
   logs: many(logs),
 }));
 
-export const students = sqliteTable('students', {
-  id: integer('student_id').primaryKey({ autoIncrement: true }),
-  userId: integer('user_id').references(() => users.id).notNull(),
-  studentCode: text('student_code').notNull().unique(),
-  department: text('department').notNull(),
-  year: integer('year').notNull(),
+export const students = mysqlTable('students', {
+  id: int('student_id').primaryKey().autoincrement(),
+  userId: int('user_id').notNull().references(() => users.id),
+  studentCode: varchar('student_code', { length: 100 }).notNull().unique(),
+  department: varchar('department', { length: 255 }).notNull(),
+  year: int('year').notNull(),
 });
 
 export const studentsRelations = relations(students, ({ one }) => ({
@@ -40,10 +40,10 @@ export const studentsRelations = relations(students, ({ one }) => ({
   }),
 }));
 
-export const librarians = sqliteTable('librarians', {
-  id: integer('librarian_id').primaryKey({ autoIncrement: true }),
-  userId: integer('user_id').references(() => users.id).notNull(),
-  employeeCode: text('employee_code').notNull().unique(),
+export const librarians = mysqlTable('librarians', {
+  id: int('librarian_id').primaryKey().autoincrement(),
+  userId: int('user_id').notNull().references(() => users.id),
+  employeeCode: varchar('employee_code', { length: 100 }).notNull().unique(),
 });
 
 export const librariansRelations = relations(librarians, ({ one }) => ({
@@ -53,63 +53,63 @@ export const librariansRelations = relations(librarians, ({ one }) => ({
   }),
 }));
 
-export const categories = sqliteTable('categories', {
-  id: integer('category_id').primaryKey({ autoIncrement: true }),
-  categoryName: text('category_name').notNull().unique(),
+export const categories = mysqlTable('categories', {
+  id: int('category_id').primaryKey().autoincrement(),
+  categoryName: varchar('category_name', { length: 255 }).notNull().unique(),
 });
 
-export const books = sqliteTable('books', {
-  id: integer('book_id').primaryKey({ autoIncrement: true }),
-  title: text('title').notNull(),
-  author: text('author').notNull(),
-  isbn: text('isbn').notNull().unique(),
-  publisher: text('publisher'),
-  categoryId: integer('category_id').references(() => categories.id),
-  quantity: integer('quantity').notNull().default(1),
-  availableQuantity: integer('available_quantity').notNull().default(1),
-  shelfLocation: text('shelf_location'),
-  format: text('format', { enum: ['Physical', 'Digital', 'Serial'] }).notNull().default('Physical'),
-  metadataSchema: text('metadata_schema', { enum: ['MARC21', 'RDA', 'Standard'] }).default('Standard'),
+export const books = mysqlTable('books', {
+  id: int('book_id').primaryKey().autoincrement(),
+  title: varchar('title', { length: 500 }).notNull(),
+  author: varchar('author', { length: 500 }).notNull(),
+  isbn: varchar('isbn', { length: 255 }).notNull().unique(),
+  publisher: varchar('publisher', { length: 255 }),
+  categoryId: int('category_id').references(() => categories.id),
+  quantity: int('quantity').notNull().default(1),
+  availableQuantity: int('available_quantity').notNull().default(1),
+  shelfLocation: varchar('shelf_location', { length: 255 }),
+  format: varchar('format', { enum: ['Physical', 'Digital', 'Serial'], length: 50 }).notNull().default('Physical'),
+  metadataSchema: varchar('metadata_schema', { enum: ['MARC21', 'RDA', 'Standard'], length: 50 }).default('Standard'),
   metadataRecord: text('metadata_record'), // JSON: holds MARC21/RDA fields
-  isAcquisition: integer('is_acquisition', { mode: 'boolean' }).default(false),
-  acquisitionSource: text('acquisition_source'),
-  budgetCode: text('budget_code'),
-  coverUrl: text('cover_url'),
-  createdAt: integer('created_at', { mode: 'timestamp' }).default(new Date()),
+  isAcquisition: boolean('is_acquisition').default(false),
+  acquisitionSource: varchar('acquisition_source', { length: 255 }),
+  budgetCode: varchar('budget_code', { length: 100 }),
+  coverUrl: varchar('cover_url', { length: 1000 }),
+  createdAt: bigint('created_at', { mode: 'number' }),
 });
 
-export const borrowRecords = sqliteTable('borrow_records', {
-  id: integer('record_id').primaryKey({ autoIncrement: true }),
-  userId: integer('user_id').references(() => users.id).notNull(),
-  bookId: integer('book_id').references(() => books.id).notNull(),
-  borrowDate: integer('borrow_date', { mode: 'timestamp' }),
-  dueDate: integer('due_date', { mode: 'timestamp' }).notNull(),
-  returnDate: integer('return_date', { mode: 'timestamp' }),
-  status: text('status', { enum: ['requested', 'borrowed', 'return_requested', 'returned', 'overdue', 'cancelled'] }).notNull().default('requested'),
+export const borrowRecords = mysqlTable('borrow_records', {
+  id: int('record_id').primaryKey().autoincrement(),
+  userId: int('user_id').notNull().references(() => users.id),
+  bookId: int('book_id').notNull().references(() => books.id),
+  borrowDate: bigint('borrow_date', { mode: 'number' }),
+  dueDate: bigint('due_date', { mode: 'number' }).notNull(),
+  returnDate: bigint('return_date', { mode: 'number' }),
+  status: varchar('status', { enum: ['requested', 'borrowed', 'return_requested', 'returned', 'overdue', 'cancelled'], length: 50 }).notNull().default('requested'),
   fineAmount: real('fine_amount').default(0),
 });
 
-export const logs = sqliteTable('logs', {
-  id: integer('log_id').primaryKey({ autoIncrement: true }),
-  userId: integer('user_id').references(() => users.id),
-  action: text('action').notNull(),
+export const logs = mysqlTable('logs', {
+  id: int('log_id').primaryKey().autoincrement(),
+  userId: int('user_id').references(() => users.id),
+  action: varchar('action', { length: 255 }).notNull(),
   details: text('details'),
-  timestamp: integer('timestamp', { mode: 'timestamp' }).default(new Date()),
+  timestamp: bigint('timestamp', { mode: 'number' }),
 });
 
-export const systemConfig = sqliteTable('system_config', {
-  key: text('key').primaryKey(),
+export const systemConfig = mysqlTable('system_config', {
+  key: varchar('key', { length: 255 }).primaryKey(),
   value: text('value').notNull(),
   description: text('description'),
-  updatedAt: integer('updated_at', { mode: 'timestamp' }).default(new Date()),
+  updatedAt: bigint('updated_at', { mode: 'number' }),
 });
 
-export const serialIssues = sqliteTable('serial_issues', {
-  id: integer('issue_id').primaryKey({ autoIncrement: true }),
-  bookId: integer('book_id').references(() => books.id).notNull(), // Links to the "Serial" parent book
-  issueNumber: text('issue_number').notNull(),
-  volumeNumber: text('volume_number'),
-  publicationDate: integer('publication_date', { mode: 'timestamp' }),
-  receivedDate: integer('received_date', { mode: 'timestamp' }),
-  status: text('status', { enum: ['Expected', 'Received', 'Claimed', 'Late'] }).default('Expected'),
+export const serialIssues = mysqlTable('serial_issues', {
+  id: int('issue_id').primaryKey().autoincrement(),
+  bookId: int('book_id').notNull().references(() => books.id),
+  issueNumber: varchar('issue_number', { length: 100 }).notNull(),
+  volumeNumber: varchar('volume_number', { length: 100 }),
+  publicationDate: bigint('publication_date', { mode: 'number' }),
+  receivedDate: bigint('received_date', { mode: 'number' }),
+  status: varchar('status', { enum: ['Expected', 'Received', 'Claimed', 'Late'], length: 50 }).default('Expected'),
 });

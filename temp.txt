@@ -1,0 +1,48 @@
+54:  const adminResult = await poolConnection.query(`
+57:  `, [adminPass, Date.now()));
+94:    const res = await poolConnection.query(`
+97:    `, [s.name, s.email, commonPass, Date.now()));
+99:    await poolConnection.query(`
+102:    `, [res[0].insertId, s.code, s.dept, s.year]);
+112:    const res = await poolConnection.query(`
+115:    `, [l.name, l.email, commonPass, Date.now()));
+117:    await poolConnection.query(`
+120:    `, [res[0].insertId, l.code]);
+166:    const suffix = i > 19 ? ` (Vol. ${Math.floor(i / 20) + 1})` : '';
+169:    await poolConnection.query(`
+172:    `, [
+175:      `ISBN-${1000 + i}-${Math.floor(Math.random() * 9000) + 1000}`,
+179:      `SEC-${Math.floor(i/10)}-${String.fromCharCode(65 + (i%5))}`,
+329:      await logAction(user.id, 'REGISTER', `User ${email} registered as ${user.role}`);
+348:      await logAction(user.id, 'LOGIN', `User ${email} logged in`);
+388:      await logAction(user.id, 'PROFILE_UPDATE', `Updated profile for ${user.email}`);
+403:          like(schema.books.title, `%${search}%`),
+404:          like(schema.books.author, `%${search}%`),
+405:          like(schema.books.isbn, `%${search}%`)
+448:      await logAction(req.user.id, 'BOOK_ADD', `Added item: ${book.title} (${book.format})`);
+472:      await logAction(req.user.id, 'SERIAL_ISSUE_ADD', `Added serial issue: ${req.body.issueNumber}`);
+495:      await logAction(req.user.id, 'CONFIG_UPDATE', `Updated config key: ${req.params.key}`);
+519:      await logAction(req.user.id, 'BOOK_UPDATE', `Updated book: ${book.title}. Qty change: ${diff}`);
+530:      await logAction(req.user.id, 'BOOK_DELETE', `Deleted book ID: ${req.params.id}`);
+576:      await logAction(req.user.id, 'BORROW_REQUEST', `Requested book ID: ${bookId}`);
+622:      await logAction(req.user.id, 'BORROW_APPROVE', `Approved request ID: ${req.params.id}`);
+638:      await logAction(req.user.id, 'BORROW_REJECT', `Rejected request ID: ${req.params.id}`);
+658:      await logAction(req.user.id, 'RETURN_REQUEST', `Requested return for ID: ${req.params.id}`);
+681:      await logAction(req.user.id, 'RETURN_APPROVE', `Approved return for ID: ${req.params.id}`);
+694:      await logAction(req.user.id, 'PAY_FINE', `Cleared fine for ID: ${req.params.id}`);
+758:      await logAction(req.user.id, 'USER_ADMIN_UPDATE', `Admin updated profile for ${user.email}`);
+773:      await logAction(req.user.id, 'USER_ROLE_CHANGE', `Changed role of ${user.email} to ${role}`);
+791:      await logAction(req.user.id, 'USER_DELETE', `Deleted user: ${user.email}`);
+825:      const topBooks = (await poolConnection.query(`
+832:      `))[0] as any;
+835:      const topBorrowers = (await poolConnection.query(`
+843:      `))[0] as any;
+846:      const categoryDistribution = (await poolConnection.query(`
+852:      `))[0] as any;
+855:      const overdueHotspots = (await poolConnection.query(`
+863:      `))[0] as any;
+879:      const monthlyTrends = (await poolConnection.query(`
+889:      `))[0] as any;
+892:      const stockStatus = (await poolConnection.query(`
+903:      `))[0] as any;
+935:      console.log(`Server running on http://localhost:${PORT}`);

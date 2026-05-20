@@ -6,98 +6,23 @@ import bcrypt from 'bcryptjs';
 import helmet from 'helmet'; // Added for HTTP header security
 import rateLimit from 'express-rate-limit'; // Added to prevent brute force attacks
 import { createServer as createViteServer } from 'vite';
-import { drizzle } from 'drizzle-orm/better-sqlite3';
-import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/mysql2';
+import mysql from 'mysql2/promise';
+
 import { eq, and, or, like, sql, desc, asc, inArray } from 'drizzle-orm';
 import * as schema from './src/db/librarydb.ts';
 
 // On Vercel, the file system is read-only except for /tmp
-const dbPath = process.env.VERCEL ? '/tmp/library.db' : 'library.db';
-const sqlite = new Database(dbPath);
-const db = drizzle(sqlite, { schema });
 
+const poolConnection = mysql.createPool(process.env.DATABASE_URL || 'mysql://root:password@localhost:3306/library');
+const db = drizzle(poolConnection, { schema, mode: 'default' });
+
+
+async function startServer() {
 // Initialize database (run migrations or create tables)
 // In a real app we'd use drizzle-kit push or migrations
 // For this prototype, we'll ensure tables exist
-sqlite.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    user_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    full_name TEXT NOT NULL,
-    email TEXT NOT NULL UNIQUE,
-    password TEXT NOT NULL,
-    role TEXT NOT NULL,
-    phone TEXT,
-    communication_preferences TEXT,
-    created_at INTEGER
-  );
-  CREATE TABLE IF NOT EXISTS students (
-    student_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER REFERENCES users(user_id),
-    student_code TEXT NOT NULL UNIQUE,
-    department TEXT NOT NULL,
-    year INTEGER NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS librarians (
-    librarian_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER REFERENCES users(user_id),
-    employee_code TEXT NOT NULL UNIQUE
-  );
-  CREATE TABLE IF NOT EXISTS categories (
-    category_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    category_name TEXT NOT NULL UNIQUE
-  );
-  CREATE TABLE IF NOT EXISTS books (
-    book_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title TEXT NOT NULL,
-    author TEXT NOT NULL,
-    isbn TEXT NOT NULL UNIQUE,
-    publisher TEXT,
-    category_id INTEGER REFERENCES categories(category_id),
-    quantity INTEGER NOT NULL DEFAULT 1,
-    available_quantity INTEGER NOT NULL DEFAULT 1,
-    shelf_location TEXT,
-    format TEXT NOT NULL DEFAULT 'Physical',
-    metadata_schema TEXT DEFAULT 'Standard',
-    metadata_record TEXT,
-    is_acquisition INTEGER DEFAULT 0,
-    acquisition_source TEXT,
-    budget_code TEXT,
-    cover_url TEXT,
-    created_at INTEGER
-  );
-  CREATE TABLE IF NOT EXISTS borrow_records (
-    record_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER REFERENCES users(user_id),
-    book_id INTEGER REFERENCES books(book_id),
-    borrow_date INTEGER,
-    due_date INTEGER NOT NULL,
-    return_date INTEGER,
-    status TEXT NOT NULL DEFAULT 'requested',
-    fine_amount REAL DEFAULT 0
-  );
-  CREATE TABLE IF NOT EXISTS logs (
-    log_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER REFERENCES users(user_id),
-    action TEXT NOT NULL,
-    details TEXT,
-    timestamp INTEGER
-  );
-  CREATE TABLE IF NOT EXISTS system_config (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL,
-    description TEXT,
-    updated_at INTEGER
-  );
-  CREATE TABLE IF NOT EXISTS serial_issues (
-    issue_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    book_id INTEGER REFERENCES books(book_id),
-    issue_number TEXT NOT NULL,
-    volume_number TEXT,
-    publication_date INTEGER,
-    received_date INTEGER,
-    status TEXT DEFAULT 'Expected'
-  );
-`);
+/* sqlite.exec disabled */
 
 // Alter tables to add columns if they don't exist (SQLite legacy handling)
 const tablesToAlter = [
@@ -111,25 +36,29 @@ const tablesToAlter = [
   { table: 'books', column: 'cover_url', type: 'TEXT' },
 ];
 
-tablesToAlter.forEach(({ table, column, type }) => {
+for (const { table, column, type } of tablesToAlter) {
   try {
-    sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    /* sqlite.exec disabled */
   } catch (e) {
     // Column likely already exists
   }
-});
+}
 
 // Simple Seeding
-const seedStatus = sqlite.prepare('SELECT COUNT(*) as count FROM users').get() as any;
+  try {
+    if (!process.env.DATABASE_URL) {
+      console.warn("DATABASE_URL is not set. Skipping DB seeding and operations.");
+    } else {
+const seedStatus = (await poolConnection.query('SELECT COUNT(*) as count FROM users'))[0][0] as any as any;
 if (seedStatus.count === 0) {
   const adminPass = bcrypt.hashSync('admin123', 10);
   const commonPass = bcrypt.hashSync('password123', 10);
 
   // Admin
-  const adminResult = sqlite.prepare(`
+  const adminResult = await poolConnection.query(`
     INSERT INTO users (full_name, email, password, role, created_at) 
     VALUES ('System Admin', 'admin@library.edu', ?, 'admin', ?)
-  `).run(adminPass, Date.now());
+  `, [adminPass, Date.now()]);
 
   // Categories (30)
   const categories = [
@@ -140,9 +69,9 @@ if (seedStatus.count === 0) {
     'Business', 'Finance', 'Marketing', 'Management', 'Programming', 
     'Artificial Intelligence', 'Cybersecurity', 'Networking', 'Data Science', 'Ethics'
   ];
-  categories.forEach(cat => {
-    sqlite.prepare('INSERT INTO categories (category_name) VALUES (?)').run(cat);
-  });
+  for (const cat of categories) {
+    await poolConnection.query('INSERT INTO categories (category_name) VALUES (?)', [cat]);
+  }
 
   // System Config Seed
   const configs = [
@@ -152,9 +81,9 @@ if (seedStatus.count === 0) {
     { key: 'LIBRARY_NAME', value: 'University Library System', description: 'Display name at top of UI' },
     { key: 'CURRENCY_SYMBOL', value: '$', description: 'Local currency for fines' }
   ];
-  configs.forEach(cfg => {
-    sqlite.prepare('INSERT INTO system_config (key, value, description, updated_at) VALUES (?, ?, ?, ?)').run(cfg.key, cfg.value, cfg.description, Date.now());
-  });
+  for (const cfg of configs) {
+    await poolConnection.query('INSERT INTO system_config (key, value, description, updated_at) VALUES (?, ?, ?, ?)', [cfg.key, cfg.value, cfg.description, Date.now()]);
+  }
 
   // Students (Realistic names based on document)
   const studentData = [
@@ -165,17 +94,17 @@ if (seedStatus.count === 0) {
     { name: 'Thandar Win', email: 'thandar@student.edu', code: 'ST005', dept: 'Physics', year: 2 }
   ];
 
-  studentData.forEach(s => {
-    const res = sqlite.prepare(`
+  for (const s of studentData) {
+    const res = await poolConnection.query(`
       INSERT INTO users (full_name, email, password, role, created_at) 
       VALUES (?, ?, ?, 'student', ?)
-    `).run(s.name, s.email, commonPass, Date.now());
+    `, [s.name, s.email, commonPass, Date.now()]);
     
-    sqlite.prepare(`
+    await poolConnection.query(`
       INSERT INTO students (user_id, student_code, department, year) 
       VALUES (?, ?, ?, ?)
-    `).run(res.lastInsertRowid, s.code, s.dept, s.year);
-  });
+    `, [(res[0] as any).insertId, s.code, s.dept, s.year]);
+  }
 
   // Librarians
   const librarianData = [
@@ -183,17 +112,17 @@ if (seedStatus.count === 0) {
     { name: 'Kevin Staff', email: 'kevin@library.edu', code: 'EMP002' }
   ];
 
-  librarianData.forEach(l => {
-    const res = sqlite.prepare(`
+  for (const l of librarianData) {
+    const res = await poolConnection.query(`
       INSERT INTO users (full_name, email, password, role, created_at) 
       VALUES (?, ?, ?, 'librarian', ?)
-    `).run(l.name, l.email, commonPass, Date.now());
+    `, [l.name, l.email, commonPass, Date.now()]);
     
-    sqlite.prepare(`
+    await poolConnection.query(`
       INSERT INTO librarians (user_id, employee_code) 
       VALUES (?, ?)
-    `).run(res.lastInsertRowid, l.code);
-  });
+    `, [(res[0] as any).insertId, l.code]);
+  }
 
   const bookCovers = [
     'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=400&q=80',
@@ -241,10 +170,10 @@ if (seedStatus.count === 0) {
     const suffix = i > 19 ? ` (Vol. ${Math.floor(i / 20) + 1})` : '';
     const catId = ((i + (i % 30)) % 30) + 1; // Distribute across 30 categories
     
-    sqlite.prepare(`
+    await poolConnection.query(`
       INSERT INTO books (title, author, isbn, category_id, quantity, available_quantity, shelf_location, cover_url, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    `, [
       template.title + suffix, 
       template.author, 
       `ISBN-${1000 + i}-${Math.floor(Math.random() * 9000) + 1000}`,
@@ -254,9 +183,13 @@ if (seedStatus.count === 0) {
       `SEC-${Math.floor(i/10)}-${String.fromCharCode(65 + (i%5))}`,
       bookCovers[i % bookCovers.length],
       Date.now()
-    );
+    ]);
   }
 }
+    }
+  } catch(e) {
+    console.error("Failed to seed database:", e);
+  }
 
 // Provide a warning indicating how to set the JWT_SECRET properly for stronger security
 if (!process.env.JWT_SECRET) {
@@ -266,10 +199,9 @@ if (!process.env.JWT_SECRET) {
 const JWT_SECRET = process.env.JWT_SECRET || 'FKMr:QC1NUyvrf||bFE{L[[H?wS^%iWDr:6)qy=?yc0';
 const FINE_RATE_PER_DAY = 1.50; // Configurable fine rate
 
-async function startServer() {
   const app = express();
   app.set('trust proxy', 1); // Trust first proxy (like Cloud Run/Nginx) for correct client IP
-  const PORT = 3000;
+  const PORT = process.env.PORT || 3000;
 
   // Add security headers using Helmet middleware
   app.use(helmet({ contentSecurityPolicy: false })); // Disabled CSP for this instance as it can block Vite HMR
@@ -337,7 +269,7 @@ async function startServer() {
         userId,
         action,
         details,
-        timestamp: new Date()
+        timestamp: Date.now()
       });
     } catch (e) {
       console.error('Log failed', e);
@@ -379,14 +311,16 @@ async function startServer() {
       }
 
       const hashedPassword = await bcrypt.hash(password, 10);
-      const [user] = await db.insert(schema.users).values({
+      const insertRes = await db.insert(schema.users).values({
         fullName,
         email,
         password: hashedPassword,
         role: role || 'student',
         phone,
-        createdAt: new Date()
-      }).returning();
+        createdAt: Date.now() as any
+      });
+      const userId = insertRes[0].insertId;
+      const user = { id: userId, role: role || 'student', email } as any;
 
       if (user.role === 'student' && studentCode) {
         await db.insert(schema.students).values({
@@ -446,10 +380,10 @@ async function startServer() {
     try {
       const { fullName, phone, studentCode, department, year, employeeCode } = req.body;
       
-      const [user] = await db.update(schema.users)
+      await db.update(schema.users)
         .set({ fullName, phone })
-        .where(eq(schema.users.id, req.user.id))
-        .returning();
+        .where(eq(schema.users.id, req.user.id));
+      const user = await db.query.users.findFirst({ where: eq(schema.users.id, req.user.id) }) as any;
 
       if (user.role === 'student' && studentCode) {
         await db.update(schema.students)
@@ -509,7 +443,7 @@ async function startServer() {
   app.post('/api/books', authenticateToken, authorize(['librarian', 'admin']), async (req: any, res) => {
     try {
       const { id, ...data } = req.body;
-      const [book] = await db.insert(schema.books).values({
+      await db.insert(schema.books).values({
         ...data,
         categoryId: data.categoryId ? Number(data.categoryId) : null,
         availableQuantity: data.quantity,
@@ -519,8 +453,9 @@ async function startServer() {
         isAcquisition: data.isAcquisition || false,
         acquisitionSource: data.acquisitionSource,
         budgetCode: data.budgetCode,
-        createdAt: new Date()
-      }).returning();
+        createdAt: Date.now()
+      });
+      const book = req.body as any;
       await logAction(req.user.id, 'BOOK_ADD', `Added item: ${book.title} (${book.format})`);
       res.json(book);
     } catch (error: any) {
@@ -544,7 +479,7 @@ async function startServer() {
       const [issue] = await db.insert(schema.serialIssues).values({
         ...req.body,
         status: req.body.status || 'Expected'
-      }).returning();
+      });
       await logAction(req.user.id, 'SERIAL_ISSUE_ADD', `Added serial issue: ${req.body.issueNumber}`);
       res.status(201).json(issue);
     } catch (error: any) {
@@ -565,9 +500,9 @@ async function startServer() {
   app.put('/api/config/:key', authenticateToken, authorize(['admin']), async (req: any, res) => {
     try {
       const [config] = await db.update(schema.systemConfig)
-        .set({ value: req.body.value, updatedAt: new Date() })
+        .set({ value: req.body.value, updatedAt: Date.now() })
         .where(eq(schema.systemConfig.key, req.params.key))
-        .returning();
+        ;
       await logAction(req.user.id, 'CONFIG_UPDATE', `Updated config key: ${req.params.key}`);
       res.json(config);
     } catch (error: any) {
@@ -584,14 +519,14 @@ async function startServer() {
       const diff = (data.quantity || oldBook.quantity) - oldBook.quantity;
       const newAvailable = Math.max(0, oldBook.availableQuantity + diff);
 
-      const [book] = await db.update(schema.books)
+      await db.update(schema.books)
         .set({
           ...data,
           categoryId: data.categoryId ? Number(data.categoryId) : null,
           availableQuantity: newAvailable
         })
-        .where(eq(schema.books.id, Number(req.params.id)))
-        .returning();
+        .where(eq(schema.books.id, Number(req.params.id)));
+      const book = await db.query.books.findFirst({ where: eq(schema.books.id, Number(req.params.id)) }) as any;
       await logAction(req.user.id, 'BOOK_UPDATE', `Updated book: ${book.title}. Qty change: ${diff}`);
       res.json(book);
     } catch (error: any) {
@@ -616,8 +551,8 @@ async function startServer() {
   });
 
   app.post('/api/categories', authenticateToken, authorize(['librarian', 'admin']), async (req, res) => {
-    const [cat] = await db.insert(schema.categories).values(req.body).returning();
-    res.json(cat);
+    await db.insert(schema.categories).values(req.body);
+    res.json(req.body);
   });
 
   // Borrowing Routes
@@ -639,16 +574,16 @@ async function startServer() {
       });
       if (existing) return res.status(400).json({ error: 'Already has a request or borrowed copy' });
 
-      const dueDate = new Date();
-      dueDate.setDate(dueDate.getDate() + 14); // 2 weeks default
+      const dueDateStr = Date.now() + 14 * 24 * 60 * 60 * 1000;
 
-      const [record] = await db.insert(schema.borrowRecords).values({
-        userId: req.user.id,
+      const recordRes = await db.insert(schema.borrowRecords).values({
+        userId: req.user.id as any,
         bookId,
-        dueDate,
+        borrowDate: Date.now() as any,
+        dueDate: dueDateStr as any,
         status: 'requested'
-      }).returning();
-
+      });
+      const record = { id: (recordRes[0] as any).insertId };
       await logAction(req.user.id, 'BORROW_REQUEST', `Requested book ID: ${bookId}`);
       res.json(record);
     } catch (error: any) {
@@ -692,7 +627,7 @@ async function startServer() {
         .where(eq(schema.books.id, book.id));
 
       await db.update(schema.borrowRecords)
-        .set({ status: 'borrowed', borrowDate: new Date() })
+        .set({ status: 'borrowed', borrowDate: Date.now() as any })
         .where(eq(schema.borrowRecords.id, record.id));
 
       await logAction(req.user.id, 'BORROW_APPROVE', `Approved request ID: ${req.params.id}`);
@@ -751,7 +686,7 @@ async function startServer() {
       }
 
       await db.update(schema.borrowRecords)
-        .set({ status: 'returned', returnDate: new Date() })
+        .set({ status: 'returned', returnDate: Date.now() as any })
         .where(eq(schema.borrowRecords.id, record.id));
 
       await logAction(req.user.id, 'RETURN_APPROVE', `Approved return for ID: ${req.params.id}`);
@@ -808,10 +743,10 @@ async function startServer() {
         updateData.password = await bcrypt.hash(req.body.password, 10);
       }
 
-      const [user] = await db.update(schema.users)
+      await db.update(schema.users)
         .set(updateData)
-        .where(eq(schema.users.id, userId))
-        .returning();
+        .where(eq(schema.users.id, userId));
+      const user = await db.query.users.findFirst({ where: eq(schema.users.id, userId) }) as any;
 
       if (user.role === 'student') {
         const existing = await db.query.students.findFirst({ where: eq(schema.students.userId, userId) });
@@ -841,10 +776,10 @@ async function startServer() {
   app.put('/api/admin/users/:id/role', authenticateToken, authorize(['admin']), async (req: any, res) => {
     try {
       const { role } = req.body;
-      const [user] = await db.update(schema.users)
+      await db.update(schema.users)
         .set({ role })
-        .where(eq(schema.users.id, Number(req.params.id)))
-        .returning();
+        .where(eq(schema.users.id, Number(req.params.id)));
+      const user = await db.query.users.findFirst({ where: eq(schema.users.id, Number(req.params.id)) }) as any;
       
       await logAction(req.user.id, 'USER_ROLE_CHANGE', `Changed role of ${user.email} to ${role}`);
       res.json(user);
@@ -862,7 +797,7 @@ async function startServer() {
       await db.delete(schema.students).where(eq(schema.students.userId, id));
       await db.delete(schema.librarians).where(eq(schema.librarians.userId, id));
       
-      const [user] = await db.delete(schema.users).where(eq(schema.users.id, id)).returning();
+      const user = await db.query.users.findFirst({ where: eq(schema.users.id, id) }) as any; await db.delete(schema.users).where(eq(schema.users.id, id));
       
       await logAction(req.user.id, 'USER_DELETE', `Deleted user: ${user.email}`);
       res.json({ message: 'User deleted' });
@@ -873,15 +808,15 @@ async function startServer() {
 
   // Reports / Dashboard
   app.get('/api/dashboard/stats', authenticateToken, authorize(['librarian', 'admin']), async (req, res) => {
-    const totalBooks = sqlite.prepare('SELECT SUM(quantity) as total FROM books').get() as any;
-    const totalUsers = sqlite.prepare('SELECT COUNT(*) as total FROM users').get() as any;
-    const activeBorrows = sqlite.prepare("SELECT COUNT(*) as total FROM borrow_records WHERE status IN ('borrowed', 'overdue')").get() as any;
-    const pendingRequests = sqlite.prepare("SELECT COUNT(*) as total FROM borrow_records WHERE status = 'requested'").get() as any;
+    const totalBooks = (await poolConnection.query('SELECT SUM(quantity) as total FROM books'))[0][0] as any as any;
+    const totalUsers = (await poolConnection.query('SELECT COUNT(*) as total FROM users'))[0][0] as any as any;
+    const activeBorrows = (await poolConnection.query("SELECT COUNT(*) as total FROM borrow_records WHERE status IN ('borrowed', 'overdue')"))[0][0] as any as any;
+    const pendingRequests = (await poolConnection.query("SELECT COUNT(*) as total FROM borrow_records WHERE status = 'requested'"))[0][0] as any as any;
     
     // Status breakdown for charts
-    const statusStats = sqlite.prepare("SELECT status, COUNT(*) as count FROM borrow_records GROUP BY status").all();
+    const statusStats = (await poolConnection.query("SELECT status, COUNT(*) as count FROM borrow_records GROUP BY status"))[0] as any;
     
-    const overdueCount = sqlite.prepare("SELECT COUNT(*) as total FROM borrow_records WHERE status = 'overdue'").get() as any;
+    const overdueCount = (await poolConnection.query("SELECT COUNT(*) as total FROM borrow_records WHERE status = 'overdue'"))[0][0] as any as any;
     
     res.json({
       summary: {
@@ -898,17 +833,17 @@ async function startServer() {
   app.get('/api/reports/detailed', authenticateToken, authorize(['librarian', 'admin']), async (req, res) => {
     try {
       // 1. Most Borrowed Books
-      const topBooks = sqlite.prepare(`
+      const topBooks = (await poolConnection.query(`
         SELECT b.title, b.author, COUNT(br.record_id) as borrow_count 
         FROM borrow_records br
         JOIN books b ON br.book_id = b.book_id
         GROUP BY b.book_id
         ORDER BY borrow_count DESC
         LIMIT 10
-      `).all();
+      `))[0] as any;
 
       // 2. Most Borrowing Students
-      const topBorrowers = sqlite.prepare(`
+      const topBorrowers = (await poolConnection.query(`
         SELECT u.full_name, u.email, COUNT(br.record_id) as borrow_count 
         FROM borrow_records br
         JOIN users u ON br.user_id = u.user_id
@@ -916,19 +851,19 @@ async function startServer() {
         GROUP BY u.user_id
         ORDER BY borrow_count DESC
         LIMIT 10
-      `).all();
+      `))[0] as any;
 
       // 3. Category Distribution (Books per category)
-      const categoryDistribution = sqlite.prepare(`
+      const categoryDistribution = (await poolConnection.query(`
         SELECT c.category_name as name, COUNT(b.book_id) as value
         FROM categories c
         JOIN books b ON c.category_id = b.category_id
         GROUP BY c.category_id
         ORDER BY value DESC
-      `).all();
+      `))[0] as any;
 
       // 4. Overdue Hotspots (Users with most overdue items)
-      const overdueHotspots = sqlite.prepare(`
+      const overdueHotspots = (await poolConnection.query(`
         SELECT u.full_name, COUNT(br.record_id) as overdue_count, SUM(br.fine_amount) as total_fines
         FROM borrow_records br
         JOIN users u ON br.user_id = u.user_id
@@ -936,7 +871,7 @@ async function startServer() {
         GROUP BY u.user_id
         ORDER BY overdue_count DESC
         LIMIT 5
-      `).all();
+      `))[0] as any;
 
       // 5. Recent Borrowing Activity (Detailed Log)
       const recentActivity = await db.select({
@@ -952,20 +887,20 @@ async function startServer() {
         .limit(20);
 
       // 6. Monthly Trends (Last 6 Months)
-      const monthlyTrends = sqlite.prepare(`
+      const monthlyTrends = (await poolConnection.query(`
         WITH RECURSIVE months(m) AS (
-          SELECT date('now', 'start of month', '-5 months')
+          SELECT DATE_SUB(DATE_FORMAT(NOW(), '%Y-%m-01'), INTERVAL 5 MONTH)
           UNION ALL
-          SELECT date(m, '+1 month') FROM months WHERE m < date('now', 'start of month')
+          SELECT DATE_ADD(m, INTERVAL 1 MONTH) FROM months WHERE m < DATE_FORMAT(NOW(), '%Y-%m-01')
         )
         SELECT 
           strftime('%Y-%m', m) as month,
-          (SELECT COUNT(*) FROM borrow_records WHERE strftime('%Y-%m', datetime(borrow_date/1000, 'unixepoch')) = strftime('%Y-%m', m)) as borrow_count
+          (SELECT COUNT(*) FROM borrow_records WHERE DATE_FORMAT(FROM_UNIXTIME(borrow_date/1000), '%Y-%m') = strftime('%Y-%m', m)) as borrow_count
         FROM months
-      `).all();
+      `))[0] as any;
 
       // 7. Low Stock / Out of Stock Books
-      const stockStatus = sqlite.prepare(`
+      const stockStatus = (await poolConnection.query(`
         SELECT 
           b.book_id,
           b.title,
@@ -976,7 +911,7 @@ async function startServer() {
         WHERE b.available_quantity <= 1
         ORDER BY b.available_quantity ASC, last_borrowed DESC
         LIMIT 20
-      `).all();
+      `))[0] as any;
 
       res.json({
         topBooks,
