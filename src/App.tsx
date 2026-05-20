@@ -14,6 +14,9 @@ import BorrowHistory from './pages/BorrowHistory';
 import Profile from './pages/Profile';
 import Navbar from './components/Navbar';
 
+/**
+ * Shape of the global Authentication context.
+ */
 interface AuthContextType {
   user: User | null;
   loading: boolean;
@@ -23,12 +26,20 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType>({} as AuthContextType);
 
+/**
+ * Custom hook to consume the AuthContext safely.
+ */
 export const useAuth = () => useContext(AuthContext);
 
+/**
+ * Main Application Component.
+ * Wraps the app in AuthProvider and handles global routing logic.
+ */
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Authenticate user on initial load by checking the token
   useEffect(() => {
     const checkAuth = async () => {
       const token = localStorage.getItem('library_token');
@@ -45,16 +56,23 @@ export default function App() {
     checkAuth();
   }, []);
 
+  /**
+   * Persists the JWT in local storage and updates the global user state.
+   */
   const login = (token: string, user: User) => {
     localStorage.setItem('library_token', token);
     setUser(user);
   };
 
+  /**
+   * Clears session storage and resets the user context.
+   */
   const logout = () => {
     localStorage.removeItem('library_token');
     setUser(null);
   };
 
+  // Show a loading indicator until the auth check is complete
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-[#F5F5F0]">
@@ -77,12 +95,13 @@ export default function App() {
               <Routes>
                 <Route path="/login" element={!user ? <Login /> : <Navigate to="/" />} />
                 
+                {/* General authenticated routes */}
                 <Route path="/" element={<PrivateRoute><Dashboard /></PrivateRoute>} />
                 <Route path="/books" element={<PrivateRoute><StudentHome /></PrivateRoute>} />
                 <Route path="/history" element={<PrivateRoute><BorrowHistory /></PrivateRoute>} />
                 <Route path="/profile" element={<PrivateRoute><Profile /></PrivateRoute>} />
                 
-                {/* Role specific */}
+                {/* Role-specific protected routes */}
                 <Route 
                   path="/manage-books" 
                   element={<PrivateRoute roles={['librarian', 'admin']}><LibrarianBooks /></PrivateRoute>} 
@@ -102,6 +121,10 @@ export default function App() {
   );
 }
 
+/**
+ * Route guard component that restricts access based on authentication status and user roles.
+ * Supports smooth mounting animations for layout transition.
+ */
 function PrivateRoute({ children, roles }: { children: React.ReactNode, roles?: string[] }) {
   const { user } = useAuth();
   const location = useLocation();

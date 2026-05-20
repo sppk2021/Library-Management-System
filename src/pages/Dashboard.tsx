@@ -7,6 +7,11 @@ import { motion } from 'motion/react';
 import { Link } from 'react-router-dom';
 import AnalyticsWorkspace from '../components/AnalyticsWorkspace';
 
+/**
+ * Primary Landing Dashboard.
+ * Dynamically renders either the Student Portal (Quick Actions)
+ * or the Librarian/Admin Workspace (Analytics & Management) based on the user's role.
+ */
 export default function Dashboard() {
   const { user } = useAuth();
   
@@ -52,10 +57,25 @@ export default function Dashboard() {
     );
   }
 
+  // Fallback map to the comprehensive analytics workspace for Admins and Librarians.
   return <AnalyticsWorkspace />;
 }
 
-function QuickActionCard({ title, desc, icon: Icon, link, color }: any) {
+/**
+ * Prop type definition for the QuickActionCard component.
+ */
+interface QuickActionCardProps {
+  title: string;
+  desc: string;
+  icon: React.ElementType;
+  link: string;
+  color: string;
+}
+
+/**
+ * Renders a visually accessible card link for quick navigation.
+ */
+function QuickActionCard({ title, desc, icon: Icon, link, color }: QuickActionCardProps) {
   return (
     <Link to={link} className="group">
       <div className="bg-white p-6 rounded-3xl border border-[#14141410] shadow-sm group-hover:shadow-lg transition-all transform group-hover:-translate-y-1 h-full">

@@ -1,5 +1,11 @@
+/**
+ * Role-based access types for the library system users.
+ */
 export type UserRole = 'student' | 'librarian' | 'admin';
 
+/**
+ * Represents a system user. Includes properties for specific roles like students or librarians.
+ */
 export interface User {
   id: number;
   fullName: string;
@@ -7,19 +13,25 @@ export interface User {
   role: UserRole;
   phone?: string;
   createdAt?: string;
-  // Student specific
+  // Student specific properties
   studentCode?: string;
   department?: string;
   year?: number;
-  // Librarian specific
+  // Librarian specific properties
   employeeCode?: string;
 }
 
+/**
+ * Subject category used to group books.
+ */
 export interface Category {
   id: number;
   categoryName: string;
 }
 
+/**
+ * Represents a library asset. Contains core metadata and current inventory status.
+ */
 export interface Book {
   id: number;
   title: string;
@@ -35,6 +47,9 @@ export interface Book {
   isAcquisition?: boolean;
 }
 
+/**
+ * Tracks a book's borrowing lifecycle from a specific user.
+ */
 export interface BorrowRecord {
   id: number;
   userId: number;
@@ -46,12 +61,18 @@ export interface BorrowRecord {
   fineAmount?: number;
 }
 
+/**
+ * Aggregated view of a borrow action including the resolved book and user entities.
+ */
 export interface BorrowHistoryItem {
   record: BorrowRecord;
   book: Book;
   user?: User;
 }
 
+/**
+ * Represents high-level analytical stats for the admin/librarian dashboards.
+ */
 export interface DashboardStats {
   summary: {
     totalBooks: number;

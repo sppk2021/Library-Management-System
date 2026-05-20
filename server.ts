@@ -1,3 +1,8 @@
+/**
+ * Main Server Entry Point.
+ * Sets up Express, Vite middleware (in development), Rate Limiting, HTTP Security Headers,
+ * and initializes the Drizzle ORM bindings to SQLite.
+ */
 import express from 'express';
 import path from 'path';
 import cors from 'cors';
@@ -6,201 +11,362 @@ import bcrypt from 'bcryptjs';
 import helmet from 'helmet'; // Added for HTTP header security
 import rateLimit from 'express-rate-limit'; // Added to prevent brute force attacks
 import { createServer as createViteServer } from 'vite';
-import { drizzle } from 'drizzle-orm/mysql2';
-import mysql from 'mysql2/promise';
-
+import { drizzle as drizzleBetterSqlite } from 'drizzle-orm/better-sqlite3';
+import { drizzle as drizzleLibSql } from 'drizzle-orm/libsql';
+import { createClient } from '@libsql/client';
+import Database from 'better-sqlite3';
 import { eq, and, or, like, sql, desc, asc, inArray } from 'drizzle-orm';
 import * as schema from './src/db/librarydb.ts';
 
-// On Vercel, the file system is read-only except for /tmp
+// ============================================================================
+// DUAL-MODE DATABASE CONFIGURATION (Turso Serverless SQL + local SQLite fallback)
+// Fits perfectly with Candidate 200309's project proposal constraints
+// ============================================================================
 
-let dbUrl = process.env.DATABASE_URL || 'mysql://root:password@localhost:3306/library';
-let connectionConfig: any = { uri: dbUrl };
-if (dbUrl.includes('ondigitalocean.com')) {
-  dbUrl = dbUrl.replace('?ssl-mode=REQUIRED', '');
-  connectionConfig = {
-    uri: dbUrl,
-    ssl: {
-      rejectUnauthorized: false
+const useTurso = !!process.env.TURSO_CONNECTION_URL;
+let db: any;
+let sqlite: any;
+let libsqlClient: any;
+
+if (useTurso) {
+  console.log('Connecting to Cloud-Native Distributed relational database via Turso SQL API...');
+  libsqlClient = createClient({
+    url: process.env.TURSO_CONNECTION_URL!,
+    authToken: process.env.TURSO_AUTH_TOKEN,
+  });
+  db = drizzleLibSql(libsqlClient, { schema });
+} else {
+  console.log('Connecting to Local relational database via better-sqlite3 engine...');
+  const dbPath = process.env.VERCEL ? '/tmp/library.db' : 'library.db';
+  sqlite = new Database(dbPath);
+  db = drizzleBetterSqlite(sqlite, { schema });
+}
+
+/**
+ * Safely executes a raw DDL command block (e.g. table creations) on both local and cloud databases.
+ */
+async function executeRawSql(sqlStr: string): Promise<void> {
+  if (useTurso) {
+    await libsqlClient.execute(sqlStr);
+  } else {
+    sqlite.exec(sqlStr);
+  }
+}
+
+/**
+ * Safely executes a raw SELECT query with parameters and returns an array of row objects.
+ */
+async function rawAll(sqlStr: string, args: any[] = []): Promise<any[]> {
+  if (useTurso) {
+    const res = await libsqlClient.execute({ sql: sqlStr, args });
+    return res.rows as any[];
+  } else {
+    return sqlite.prepare(sqlStr).all(...args);
+  }
+}
+
+/**
+ * Safely executes a raw SELECT query with parameters and returns the first row or null.
+ */
+async function rawGet(sqlStr: string, args: any[] = []): Promise<any> {
+  if (useTurso) {
+    const res = await libsqlClient.execute({ sql: sqlStr, args });
+    return res.rows[0] || null;
+  } else {
+    return sqlite.prepare(sqlStr).get(...args);
+  }
+}
+
+/**
+ * Safely executes raw inserts and returns the rowid increment handle.
+ */
+async function rawInsert(sqlStr: string, args: any[] = []): Promise<{ lastInsertRowid: number }> {
+  if (useTurso) {
+    const res = await libsqlClient.execute({ sql: sqlStr, args });
+    const lastId = res.lastInsertRowid;
+    return { lastInsertRowid: lastId ? Number(lastId) : 0 };
+  } else {
+    const res = sqlite.prepare(sqlStr).run(...args);
+    return { lastInsertRowid: Number(res.lastInsertRowid) };
+  }
+}
+
+/**
+ * Safely executes seed insertion, updates, or deletion statements.
+ */
+async function rawRun(sqlStr: string, args: any[] = []): Promise<void> {
+  if (useTurso) {
+    await libsqlClient.execute({ sql: sqlStr, args });
+  } else {
+    sqlite.prepare(sqlStr).run(...args);
+  }
+}
+
+/**
+ * Ensures centralLMS tables, alterations, and default seed contents are prepared.
+ */
+async function initDatabase() {
+  await executeRawSql(`
+    CREATE TABLE IF NOT EXISTS users (
+      user_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      full_name TEXT NOT NULL,
+      email TEXT NOT NULL UNIQUE,
+      password TEXT NOT NULL,
+      role TEXT NOT NULL,
+      phone TEXT,
+      communication_preferences TEXT,
+      created_at INTEGER
+    );
+  `);
+
+  await executeRawSql(`
+    CREATE TABLE IF NOT EXISTS students (
+      student_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER REFERENCES users(user_id),
+      student_code TEXT NOT NULL UNIQUE,
+      department TEXT NOT NULL,
+      year INTEGER NOT NULL
+    );
+  `);
+
+  await executeRawSql(`
+    CREATE TABLE IF NOT EXISTS librarians (
+      librarian_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER REFERENCES users(user_id),
+      employee_code TEXT NOT NULL UNIQUE
+    );
+  `);
+
+  await executeRawSql(`
+    CREATE TABLE IF NOT EXISTS categories (
+      category_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      category_name TEXT NOT NULL UNIQUE
+    );
+  `);
+
+  await executeRawSql(`
+    CREATE TABLE IF NOT EXISTS books (
+      book_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      author TEXT NOT NULL,
+      isbn TEXT NOT NULL UNIQUE,
+      publisher TEXT,
+      category_id INTEGER REFERENCES categories(category_id),
+      quantity INTEGER NOT NULL DEFAULT 1,
+      available_quantity INTEGER NOT NULL DEFAULT 1,
+      shelf_location TEXT,
+      format TEXT NOT NULL DEFAULT 'Physical',
+      metadata_schema TEXT DEFAULT 'Standard',
+      metadata_record TEXT,
+      is_acquisition INTEGER DEFAULT 0,
+      acquisition_source TEXT,
+      budget_code TEXT,
+      cover_url TEXT,
+      created_at INTEGER
+    );
+  `);
+
+  await executeRawSql(`
+    CREATE TABLE IF NOT EXISTS borrow_records (
+      record_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER REFERENCES users(user_id),
+      book_id INTEGER REFERENCES books(book_id),
+      borrow_date INTEGER,
+      due_date INTEGER NOT NULL,
+      return_date INTEGER,
+      status TEXT NOT NULL DEFAULT 'requested',
+      fine_amount REAL DEFAULT 0
+    );
+  `);
+
+  await executeRawSql(`
+    CREATE TABLE IF NOT EXISTS logs (
+      log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER REFERENCES users(user_id),
+      action TEXT NOT NULL,
+      details TEXT,
+      timestamp INTEGER
+    );
+  `);
+
+  await executeRawSql(`
+    CREATE TABLE IF NOT EXISTS system_config (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      description TEXT,
+      updated_at INTEGER
+    );
+  `);
+
+  await executeRawSql(`
+    CREATE TABLE IF NOT EXISTS serial_issues (
+      issue_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      book_id INTEGER REFERENCES books(book_id),
+      issue_number TEXT NOT NULL,
+      volume_number TEXT,
+      publication_date INTEGER,
+      received_date INTEGER,
+      status TEXT DEFAULT 'Expected'
+    );
+  `);
+
+  // Migrate columns for legacy tables and structure evolution
+  const tablesToAlter = [
+    { table: 'users', column: 'communication_preferences', type: 'TEXT' },
+    { table: 'books', column: 'format', type: "TEXT NOT NULL DEFAULT 'Physical'" },
+    { table: 'books', column: 'metadata_schema', type: "TEXT DEFAULT 'Standard'" },
+    { table: 'books', column: 'metadata_record', type: 'TEXT' },
+    { table: 'books', column: 'is_acquisition', type: 'INTEGER DEFAULT 0' },
+    { table: 'books', column: 'acquisition_source', type: 'TEXT' },
+    { table: 'books', column: 'budget_code', type: 'TEXT' },
+    { table: 'books', column: 'cover_url', type: 'TEXT' },
+  ];
+
+  for (const { table, column, type } of tablesToAlter) {
+    try {
+      await executeRawSql(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    } catch (e) {
+      // Column likely already exists
     }
-  };
-}
-const poolConnection = mysql.createPool(connectionConfig);
-const db = drizzle(poolConnection, { schema, mode: 'default' });
-
-
-async function startServer() {
-// Initialize database (run migrations or create tables)
-// In a real app we'd use drizzle-kit push or migrations
-// For this prototype, we'll ensure tables exist
-/* sqlite.exec disabled */
-
-// Alter tables to add columns if they don't exist (SQLite legacy handling)
-const tablesToAlter = [
-  { table: 'users', column: 'communication_preferences', type: 'TEXT' },
-  { table: 'books', column: 'format', type: "TEXT NOT NULL DEFAULT 'Physical'" },
-  { table: 'books', column: 'metadata_schema', type: "TEXT DEFAULT 'Standard'" },
-  { table: 'books', column: 'metadata_record', type: 'TEXT' },
-  { table: 'books', column: 'is_acquisition', type: 'INTEGER DEFAULT 0' },
-  { table: 'books', column: 'acquisition_source', type: 'TEXT' },
-  { table: 'books', column: 'budget_code', type: 'TEXT' },
-  { table: 'books', column: 'cover_url', type: 'TEXT' },
-];
-
-for (const { table, column, type } of tablesToAlter) {
-  try {
-    /* sqlite.exec disabled */
-  } catch (e) {
-    // Column likely already exists
-  }
-}
-
-// Simple Seeding
-  try {
-    if (!process.env.DATABASE_URL) {
-      console.warn("DATABASE_URL is not set. Skipping DB seeding and operations.");
-    } else {
-const seedStatus = (await poolConnection.query('SELECT COUNT(*) as count FROM users'))[0][0] as any as any;
-if (seedStatus.count === 0) {
-  const adminPass = bcrypt.hashSync('admin123', 10);
-  const commonPass = bcrypt.hashSync('password123', 10);
-
-  // Admin
-  const adminResult = await poolConnection.query(`
-    INSERT INTO users (full_name, email, password, role, created_at) 
-    VALUES ('System Admin', 'admin@library.edu', ?, 'admin', ?)
-  `, [adminPass, Date.now()]);
-
-  // Categories (30)
-  const categories = [
-    'Computer Science', 'Mathematics', 'Physics', 'Chemistry', 'Biology', 
-    'Literature', 'History', 'Geography', 'Philosophy', 'Psychology', 
-    'Sociology', 'Economics', 'Political Science', 'Law', 'Medicine', 
-    'Engineering', 'Architecture', 'Art', 'Music', 'Sports', 
-    'Business', 'Finance', 'Marketing', 'Management', 'Programming', 
-    'Artificial Intelligence', 'Cybersecurity', 'Networking', 'Data Science', 'Ethics'
-  ];
-  for (const cat of categories) {
-    await poolConnection.query('INSERT INTO categories (category_name) VALUES (?)', [cat]);
   }
 
-  // System Config Seed
-  const configs = [
-    { key: 'LOAN_DURATION_DAYS', value: '14', description: 'Standard loan period for members' },
-    { key: 'DAILY_FINE_RATE', value: '0.50', description: 'Fine amount per day overdue ($)' },
-    { key: 'MAX_LOANS_PER_USER', value: '5', description: 'Maximum books a student can hold' },
-    { key: 'LIBRARY_NAME', value: 'University Library System', description: 'Display name at top of UI' },
-    { key: 'CURRENCY_SYMBOL', value: '$', description: 'Local currency for fines' }
-  ];
-  for (const cfg of configs) {
-    await poolConnection.query('INSERT INTO system_config (key, value, description, updated_at) VALUES (?, ?, ?, ?)', [cfg.key, cfg.value, cfg.description, Date.now()]);
-  }
+  // Seeding Section
+  const seedStatus = await rawGet('SELECT COUNT(*) as count FROM users');
+  if (!seedStatus || seedStatus.count === 0) {
+    console.log('Seeding initial centralLMS relational database structures...');
+    const adminPass = bcrypt.hashSync('admin123', 10);
+    const commonPass = bcrypt.hashSync('password123', 10);
 
-  // Students (Realistic names based on document)
-  const studentData = [
-    { name: 'Saw Pyae Phyo Kyaw', email: 'saw@student.edu', code: '200309', dept: 'Cyber Security', year: 3 },
-    { name: 'Aung Kyaw Thu', email: 'aung@student.edu', code: 'ST002', dept: 'IT', year: 2 },
-    { name: 'Ei Phyu Khin', email: 'ei@student.edu', code: 'ST003', dept: 'Business', year: 1 },
-    { name: 'Min Htet Oo', email: 'min@student.edu', code: 'ST004', dept: 'Mathematics', year: 4 },
-    { name: 'Thandar Win', email: 'thandar@student.edu', code: 'ST005', dept: 'Physics', year: 2 }
-  ];
-
-  for (const s of studentData) {
-    const res = await poolConnection.query(`
+    // Seed Main Administrator
+    await rawRun(`
       INSERT INTO users (full_name, email, password, role, created_at) 
-      VALUES (?, ?, ?, 'student', ?)
-    `, [s.name, s.email, commonPass, Date.now()]);
-    
-    await poolConnection.query(`
-      INSERT INTO students (user_id, student_code, department, year) 
-      VALUES (?, ?, ?, ?)
-    `, [(res[0] as any).insertId, s.code, s.dept, s.year]);
-  }
+      VALUES ('System Admin', 'admin@library.edu', ?, 'admin', ?)
+    `, [adminPass, Date.now()]);
 
-  // Librarians
-  const librarianData = [
-    { name: 'Sarah Librarian', email: 'sarah@library.edu', code: 'EMP001' },
-    { name: 'Kevin Staff', email: 'kevin@library.edu', code: 'EMP002' }
-  ];
-
-  for (const l of librarianData) {
-    const res = await poolConnection.query(`
-      INSERT INTO users (full_name, email, password, role, created_at) 
-      VALUES (?, ?, ?, 'librarian', ?)
-    `, [l.name, l.email, commonPass, Date.now()]);
-    
-    await poolConnection.query(`
-      INSERT INTO librarians (user_id, employee_code) 
-      VALUES (?, ?)
-    `, [(res[0] as any).insertId, l.code]);
-  }
-
-  const bookCovers = [
-    'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=400&q=80',
-    'https://images.unsplash.com/photo-1589998059171-988d887df646?w=400&q=80',
-    'https://images.unsplash.com/photo-1543004218-ee141d0ef1bd?w=400&q=80',
-    'https://images.unsplash.com/photo-1532012197267-da84d127e765?w=400&q=80',
-    'https://images.unsplash.com/photo-1497633762265-9d179a990aa6?w=400&q=80',
-    'https://images.unsplash.com/photo-1531988042231-d39a9cc12a9a?w=400&q=80',
-    'https://images.unsplash.com/photo-1512820790803-83ca734da794?w=400&q=80',
-    'https://images.unsplash.com/photo-1495446815901-a7297e633e8d?w=400&q=80',
-    'https://images.unsplash.com/photo-1516979187457-637abb4f9353?w=400&q=80',
-    'https://images.unsplash.com/photo-1550399105-c4db5fb85c18?w=400&q=80',
-    'https://images.unsplash.com/photo-1519682337058-a94d519337bc?w=400&q=80',
-    'https://images.unsplash.com/photo-1476275466078-4007374efbbe?w=400&q=80',
-    'https://images.unsplash.com/photo-1513001900722-370f803f498d?w=400&q=80'
-  ];
-
-  // Books (Generating 150+ books)
-  const bookTitles = [
-    { title: 'Clean Code: A Handbook of Agile Software Craftsmanship', author: 'Robert C. Martin', cat: 1 },
-    { title: 'Introduction to Algorithms', author: 'Thomas H. Cormen', cat: 1 },
-    { title: 'Design Patterns', author: 'Erich Gamma', cat: 1 },
-    { title: 'The Pragmatic Programmer', author: 'Andrew Hunt', cat: 25 },
-    { title: 'Modern Operating Systems', author: 'Andrew S. Tanenbaum', cat: 1 },
-    { title: 'Computer Networking: A Top-Down Approach', author: 'James Kurose', cat: 28 },
-    { title: 'Artificial Intelligence: A Modern Approach', author: 'Stuart Russell', cat: 26 },
-    { title: 'Cybersecurity for Beginners', author: 'Raef Meeuwisse', cat: 27 },
-    { title: 'Data Science from Scratch', author: 'Joel Grus', cat: 29 },
-    { title: 'The Art of Computer Programming', author: 'Donald Knuth', cat: 25 },
-    { title: 'Discrete Mathematics and Its Applications', author: 'Kenneth Rosen', cat: 2 },
-    { title: 'Calculus', author: 'James Stewart', cat: 2 },
-    { title: 'The Great Gatsby', author: 'F. Scott Fitzgerald', cat: 6 },
-    { title: 'To Kill a Mockingbird', author: 'Harper Lee', cat: 6 },
-    { title: 'A Brief History of Time', author: 'Stephen Hawking', cat: 3 },
-    { title: 'Thinking, Fast and Slow', author: 'Daniel Kahneman', cat: 10 },
-    { title: 'The Wealth of Nations', author: 'Adam Smith', cat: 12 },
-    { title: 'Sapiens: A Brief History of Humankind', author: 'Yuval Noah Harari', cat: 7 },
-    { title: 'The Republic', author: 'Plato', cat: 9 },
-    { title: 'Meditations', author: 'Marcus Aurelius', cat: 9 }
-  ];
-
-  // Fill up to 150 books by repeating or variation
-  for (let i = 0; i < 150; i++) {
-    const template = bookTitles[i % bookTitles.length];
-    const suffix = i > 19 ? ` (Vol. ${Math.floor(i / 20) + 1})` : '';
-    const catId = ((i + (i % 30)) % 30) + 1; // Distribute across 30 categories
-    
-    await poolConnection.query(`
-      INSERT INTO books (title, author, isbn, category_id, quantity, available_quantity, shelf_location, cover_url, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
-      template.title + suffix, 
-      template.author, 
-      `ISBN-${1000 + i}-${Math.floor(Math.random() * 9000) + 1000}`,
-      catId,
-      1, // Each book is 1 per user request
-      1,
-      `SEC-${Math.floor(i/10)}-${String.fromCharCode(65 + (i%5))}`,
-      bookCovers[i % bookCovers.length],
-      Date.now()
-    ]);
-  }
-}
+    // Categories (30)
+    const categories = [
+      'Computer Science', 'Mathematics', 'Physics', 'Chemistry', 'Biology', 
+      'Literature', 'History', 'Geography', 'Philosophy', 'Psychology', 
+      'Sociology', 'Economics', 'Political Science', 'Law', 'Medicine', 
+      'Engineering', 'Architecture', 'Art', 'Music', 'Sports', 
+      'Business', 'Finance', 'Marketing', 'Management', 'Programming', 
+      'Artificial Intelligence', 'Cybersecurity', 'Networking', 'Data Science', 'Ethics'
+    ];
+    for (const cat of categories) {
+      await rawRun('INSERT INTO categories (category_name) VALUES (?)', [cat]);
     }
-  } catch(e) {
-    console.error("Failed to seed database:", e);
+
+    // Default System Configurations
+    const configs = [
+      { key: 'LOAN_DURATION_DAYS', value: '14', description: 'Standard loan period for members' },
+      { key: 'DAILY_FINE_RATE', value: '0.50', description: 'Fine amount per day overdue ($)' },
+      { key: 'MAX_LOANS_PER_USER', value: '5', description: 'Maximum books a student can hold' },
+      { key: 'LIBRARY_NAME', value: 'University Library System', description: 'Display name at top of UI' },
+      { key: 'CURRENCY_SYMBOL', value: '$', description: 'Local currency for fines' }
+    ];
+    for (const cfg of configs) {
+      await rawRun('INSERT INTO system_config (key, value, description, updated_at) VALUES (?, ?, ?, ?)', [cfg.key, cfg.value, cfg.description, Date.now()]);
+    }
+
+    // Default Academic Students
+    const studentData = [
+      { name: 'Saw Pyae Phyo Kyaw', email: 'saw@student.edu', code: '200309', dept: 'Cyber Security', year: 3 },
+      { name: 'Aung Kyaw Thu', email: 'aung@student.edu', code: 'ST002', dept: 'IT', year: 2 },
+      { name: 'Ei Phyu Khin', email: 'ei@student.edu', code: 'ST003', dept: 'Business', year: 1 },
+      { name: 'Min Htet Oo', email: 'min@student.edu', code: 'ST004', dept: 'Mathematics', year: 4 },
+      { name: 'Thandar Win', email: 'thandar@student.edu', code: 'ST005', dept: 'Physics', year: 2 }
+    ];
+    for (const s of studentData) {
+      const res = await rawInsert(`
+        INSERT INTO users (full_name, email, password, role, created_at) 
+        VALUES (?, ?, ?, 'student', ?)
+      `, [s.name, s.email, commonPass, Date.now()]);
+      
+      await rawRun(`
+        INSERT INTO students (user_id, student_code, department, year) 
+        VALUES (?, ?, ?, ?)
+      `, [res.lastInsertRowid, s.code, s.dept, s.year]);
+    }
+
+    // Default Institutional Librarians
+    const librarianData = [
+      { name: 'Sarah Librarian', email: 'sarah@library.edu', code: 'EMP001' },
+      { name: 'Kevin Staff', email: 'kevin@library.edu', code: 'EMP002' }
+    ];
+    for (const l of librarianData) {
+      const res = await rawInsert(`
+        INSERT INTO users (full_name, email, password, role, created_at) 
+        VALUES (?, ?, ?, 'librarian', ?)
+      `, [l.name, l.email, commonPass, Date.now()]);
+      
+      await rawRun(`
+        INSERT INTO librarians (user_id, employee_code) 
+        VALUES (?, ?)
+      `, [res.lastInsertRowid, l.code]);
+    }
+
+    const bookCovers = [
+      'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=400&q=80',
+      'https://images.unsplash.com/photo-1589998059171-988d887df646?w=400&q=80',
+      'https://images.unsplash.com/photo-1543004218-ee141d0ef1bd?w=400&q=80',
+      'https://images.unsplash.com/photo-1532012197267-da84d127e765?w=400&q=80',
+      'https://images.unsplash.com/photo-1497633762265-9d179a990aa6?w=400&q=80',
+      'https://images.unsplash.com/photo-1531988042231-d39a9cc12a9a?w=400&q=80',
+      'https://images.unsplash.com/photo-1512820790803-83ca734da794?w=400&q=80',
+      'https://images.unsplash.com/photo-1495446815901-a7297e633e8d?w=400&q=80',
+      'https://images.unsplash.com/photo-1516979187457-637abb4f9353?w=400&q=80',
+      'https://images.unsplash.com/photo-1550399105-c4db5fb85c18?w=400&q=80',
+      'https://images.unsplash.com/photo-1519682337058-a94d519337bc?w=400&q=80',
+      'https://images.unsplash.com/photo-1476275466078-4007374efbbe?w=400&q=80',
+      'https://images.unsplash.com/photo-1513001900722-370f803f498d?w=400&q=80'
+    ];
+
+    // Seed 150+ academic shelf units
+    const bookTitles = [
+      { title: 'Clean Code: A Handbook of Agile Software Craftsmanship', author: 'Robert C. Martin', cat: 1 },
+      { title: 'Introduction to Algorithms', author: 'Thomas H. Cormen', cat: 1 },
+      { title: 'Design Patterns', author: 'Erich Gamma', cat: 1 },
+      { title: 'The Pragmatic Programmer', author: 'Andrew Hunt', cat: 25 },
+      { title: 'Modern Operating Systems', author: 'Andrew S. Tanenbaum', cat: 1 },
+      { title: 'Computer Networking: A Top-Down Approach', author: 'James Kurose', cat: 28 },
+      { title: 'Artificial Intelligence: A Modern Approach', author: 'Stuart Russell', cat: 26 },
+      { title: 'Cybersecurity for Beginners', author: 'Raef Meeuwisse', cat: 27 },
+      { title: 'Data Science from Scratch', author: 'Joel Grus', cat: 29 },
+      { title: 'The Art of Computer Programming', author: 'Donald Knuth', cat: 25 },
+      { title: 'Discrete Mathematics and Its Applications', author: 'Kenneth Rosen', cat: 2 },
+      { title: 'Calculus', author: 'James Stewart', cat: 2 },
+      { title: 'The Great Gatsby', author: 'F. Scott Fitzgerald', cat: 6 },
+      { title: 'To Kill a Mockingbird', author: 'Harper Lee', cat: 6 },
+      { title: 'A Brief History of Time', author: 'Stephen Hawking', cat: 3 },
+      { title: 'Thinking, Fast and Slow', author: 'Daniel Kahneman', cat: 10 },
+      { title: 'The Wealth of Nations', author: 'Adam Smith', cat: 12 },
+      { title: 'Sapiens: A Brief History of Humankind', author: 'Yuval Noah Harari', cat: 7 },
+      { title: 'The Republic', author: 'Plato', cat: 9 },
+      { title: 'Meditations', author: 'Marcus Aurelius', cat: 9 }
+    ];
+
+    for (let i = 0; i < 150; i++) {
+      const template = bookTitles[i % bookTitles.length];
+      const suffix = i > 19 ? ` (Vol. ${Math.floor(i / 20) + 1})` : '';
+      const catId = ((i + (i % 30)) % 30) + 1;
+      
+      await rawRun(`
+        INSERT INTO books (title, author, isbn, category_id, quantity, available_quantity, shelf_location, cover_url, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        template.title + suffix,
+        template.author,
+        `ISBN-${1000 + i}-${Math.floor(Math.random() * 9000) + 1000}`,
+        catId,
+        1,
+        1,
+        `SEC-${Math.floor(i/10)}-${String.fromCharCode(65 + (i%5))}`,
+        bookCovers[i % bookCovers.length],
+        Date.now()
+      ]);
+    }
   }
+}
 
 // Provide a warning indicating how to set the JWT_SECRET properly for stronger security
 if (!process.env.JWT_SECRET) {
@@ -210,9 +376,15 @@ if (!process.env.JWT_SECRET) {
 const JWT_SECRET = process.env.JWT_SECRET || 'FKMr:QC1NUyvrf||bFE{L[[H?wS^%iWDr:6)qy=?yc0';
 const FINE_RATE_PER_DAY = 1.50; // Configurable fine rate
 
+/**
+ * Bootstraps and starts the Express Application.
+ */
+async function startServer() {
+  // Gracefully construct all SQL tables asynchronously before launching Express paths
+  await initDatabase();
   const app = express();
   app.set('trust proxy', 1); // Trust first proxy (like Cloud Run/Nginx) for correct client IP
-  const PORT = process.env.PORT || 3000;
+  const PORT = 3000;
 
   // Add security headers using Helmet middleware
   app.use(helmet({ contentSecurityPolicy: false })); // Disabled CSP for this instance as it can block Vite HMR
@@ -243,6 +415,10 @@ const FINE_RATE_PER_DAY = 1.50; // Configurable fine rate
     message: { error: 'Too many failed login attempts from this IP, please try again after 5 minutes' },
   });
   app.use('/api/auth/login', loginLimiter);
+
+  // ============================================================================
+  // MIDDLEWARE UTILITIES
+  // ============================================================================
 
   // Helper: Calculate Fines
   const updateFines = async () => {
@@ -280,7 +456,7 @@ const FINE_RATE_PER_DAY = 1.50; // Configurable fine rate
         userId,
         action,
         details,
-        timestamp: Date.now()
+        timestamp: new Date()
       });
     } catch (e) {
       console.error('Log failed', e);
@@ -307,7 +483,10 @@ const FINE_RATE_PER_DAY = 1.50; // Configurable fine rate
     next();
   };
 
-  // Auth Routes
+  // ============================================================================
+  // AUTHENTICATION & USER ROUTES
+  // ============================================================================
+
   app.post('/api/auth/register', async (req, res) => {
     const { fullName, email, password, role, studentCode, department, year, employeeCode, phone } = req.body;
     try {
@@ -322,16 +501,14 @@ const FINE_RATE_PER_DAY = 1.50; // Configurable fine rate
       }
 
       const hashedPassword = await bcrypt.hash(password, 10);
-      const insertRes = await db.insert(schema.users).values({
+      const [user] = await db.insert(schema.users).values({
         fullName,
         email,
         password: hashedPassword,
         role: role || 'student',
         phone,
-        createdAt: Date.now() as any
-      });
-      const userId = insertRes[0].insertId;
-      const user = { id: userId, role: role || 'student', email } as any;
+        createdAt: new Date()
+      }).returning();
 
       if (user.role === 'student' && studentCode) {
         await db.insert(schema.students).values({
@@ -391,10 +568,10 @@ const FINE_RATE_PER_DAY = 1.50; // Configurable fine rate
     try {
       const { fullName, phone, studentCode, department, year, employeeCode } = req.body;
       
-      await db.update(schema.users)
+      const [user] = await db.update(schema.users)
         .set({ fullName, phone })
-        .where(eq(schema.users.id, req.user.id));
-      const user = await db.query.users.findFirst({ where: eq(schema.users.id, req.user.id) }) as any;
+        .where(eq(schema.users.id, req.user.id))
+        .returning();
 
       if (user.role === 'student' && studentCode) {
         await db.update(schema.students)
@@ -413,7 +590,10 @@ const FINE_RATE_PER_DAY = 1.50; // Configurable fine rate
     }
   });
 
-  // Book Routes
+  // ============================================================================
+  // CATALOG & BOOK ROUTES
+  // ============================================================================
+
   app.get('/api/books', async (req, res) => {
     const { search, categoryId } = req.query;
     try {
@@ -454,7 +634,7 @@ const FINE_RATE_PER_DAY = 1.50; // Configurable fine rate
   app.post('/api/books', authenticateToken, authorize(['librarian', 'admin']), async (req: any, res) => {
     try {
       const { id, ...data } = req.body;
-      await db.insert(schema.books).values({
+      const [book] = await db.insert(schema.books).values({
         ...data,
         categoryId: data.categoryId ? Number(data.categoryId) : null,
         availableQuantity: data.quantity,
@@ -464,9 +644,8 @@ const FINE_RATE_PER_DAY = 1.50; // Configurable fine rate
         isAcquisition: data.isAcquisition || false,
         acquisitionSource: data.acquisitionSource,
         budgetCode: data.budgetCode,
-        createdAt: Date.now()
-      });
-      const book = req.body as any;
+        createdAt: new Date()
+      }).returning();
       await logAction(req.user.id, 'BOOK_ADD', `Added item: ${book.title} (${book.format})`);
       res.json(book);
     } catch (error: any) {
@@ -490,7 +669,7 @@ const FINE_RATE_PER_DAY = 1.50; // Configurable fine rate
       const [issue] = await db.insert(schema.serialIssues).values({
         ...req.body,
         status: req.body.status || 'Expected'
-      });
+      }).returning();
       await logAction(req.user.id, 'SERIAL_ISSUE_ADD', `Added serial issue: ${req.body.issueNumber}`);
       res.status(201).json(issue);
     } catch (error: any) {
@@ -511,9 +690,9 @@ const FINE_RATE_PER_DAY = 1.50; // Configurable fine rate
   app.put('/api/config/:key', authenticateToken, authorize(['admin']), async (req: any, res) => {
     try {
       const [config] = await db.update(schema.systemConfig)
-        .set({ value: req.body.value, updatedAt: Date.now() })
+        .set({ value: req.body.value, updatedAt: new Date() })
         .where(eq(schema.systemConfig.key, req.params.key))
-        ;
+        .returning();
       await logAction(req.user.id, 'CONFIG_UPDATE', `Updated config key: ${req.params.key}`);
       res.json(config);
     } catch (error: any) {
@@ -530,14 +709,14 @@ const FINE_RATE_PER_DAY = 1.50; // Configurable fine rate
       const diff = (data.quantity || oldBook.quantity) - oldBook.quantity;
       const newAvailable = Math.max(0, oldBook.availableQuantity + diff);
 
-      await db.update(schema.books)
+      const [book] = await db.update(schema.books)
         .set({
           ...data,
           categoryId: data.categoryId ? Number(data.categoryId) : null,
           availableQuantity: newAvailable
         })
-        .where(eq(schema.books.id, Number(req.params.id)));
-      const book = await db.query.books.findFirst({ where: eq(schema.books.id, Number(req.params.id)) }) as any;
+        .where(eq(schema.books.id, Number(req.params.id)))
+        .returning();
       await logAction(req.user.id, 'BOOK_UPDATE', `Updated book: ${book.title}. Qty change: ${diff}`);
       res.json(book);
     } catch (error: any) {
@@ -562,11 +741,15 @@ const FINE_RATE_PER_DAY = 1.50; // Configurable fine rate
   });
 
   app.post('/api/categories', authenticateToken, authorize(['librarian', 'admin']), async (req, res) => {
-    await db.insert(schema.categories).values(req.body);
-    res.json(req.body);
+    const [cat] = await db.insert(schema.categories).values(req.body).returning();
+    res.json(cat);
   });
 
-  // Borrowing Routes
+  // ============================================================================
+  // BORROWING & LENDING SYSTEM ROUTES
+  // Contains logic for borrow requests, approvals, returns, and fines.
+  // ============================================================================
+
   app.post('/api/borrow/request', authenticateToken, authorize(['student']), async (req: any, res) => {
     const { bookId } = req.body;
     try {
@@ -585,16 +768,16 @@ const FINE_RATE_PER_DAY = 1.50; // Configurable fine rate
       });
       if (existing) return res.status(400).json({ error: 'Already has a request or borrowed copy' });
 
-      const dueDateStr = Date.now() + 14 * 24 * 60 * 60 * 1000;
+      const dueDate = new Date();
+      dueDate.setDate(dueDate.getDate() + 14); // 2 weeks default
 
-      const recordRes = await db.insert(schema.borrowRecords).values({
-        userId: req.user.id as any,
+      const [record] = await db.insert(schema.borrowRecords).values({
+        userId: req.user.id,
         bookId,
-        borrowDate: Date.now() as any,
-        dueDate: dueDateStr as any,
+        dueDate,
         status: 'requested'
-      });
-      const record = { id: (recordRes[0] as any).insertId };
+      }).returning();
+
       await logAction(req.user.id, 'BORROW_REQUEST', `Requested book ID: ${bookId}`);
       res.json(record);
     } catch (error: any) {
@@ -627,24 +810,34 @@ const FINE_RATE_PER_DAY = 1.50; // Configurable fine rate
 
   app.post('/api/borrow/approve/:id', authenticateToken, authorize(['librarian', 'admin']), async (req: any, res) => {
     try {
-      const record = await db.query.borrowRecords.findFirst({ where: eq(schema.borrowRecords.id, Number(req.params.id)) });
-      if (!record || record.status !== 'requested') return res.status(400).json({ error: 'Invalid record status' });
+      // Execute within a database transaction to prevent double-lending and concurrency anomalies (Race Conditions)
+      await db.transaction(async (tx) => {
+        // Fetch borrow record under lock transaction state
+        const record = await tx.query.borrowRecords.findFirst({ where: eq(schema.borrowRecords.id, Number(req.params.id)) });
+        if (!record || record.status !== 'requested') throw new Error('Invalid record status');
 
-      const book = await db.query.books.findFirst({ where: eq(schema.books.id, record.bookId) });
-      if (!book || book.availableQuantity <= 0) return res.status(400).json({ error: 'Book no longer available' });
+        // Fetch corresponding inventory under the transactional context
+        const book = await tx.query.books.findFirst({ where: eq(schema.books.id, record.bookId) });
+        if (!book || book.availableQuantity <= 0) throw new Error('Book is no longer available');
 
-      await db.update(schema.books)
-        .set({ availableQuantity: book.availableQuantity - 1 })
-        .where(eq(schema.books.id, book.id));
+        // Atomically decrement stock
+        await tx.update(schema.books)
+          .set({ availableQuantity: book.availableQuantity - 1 })
+          .where(eq(schema.books.id, book.id));
 
-      await db.update(schema.borrowRecords)
-        .set({ status: 'borrowed', borrowDate: Date.now() as any })
-        .where(eq(schema.borrowRecords.id, record.id));
+        // Mark request as successfully borrowed with timestamp
+        await tx.update(schema.borrowRecords)
+          .set({ status: 'borrowed', borrowDate: new Date() })
+          .where(eq(schema.borrowRecords.id, record.id));
 
-      await logAction(req.user.id, 'BORROW_APPROVE', `Approved request ID: ${req.params.id}`);
+        // Audit Trail system log
+        await logAction(req.user.id, 'BORROW_APPROVE', `Approved request ID: ${req.params.id}`);
+      });
+      
       res.json({ message: 'Request approved' });
     } catch (error: any) {
-      res.status(500).json({ error: error.message });
+      console.error('Borrow Approval failed under database transaction:', error);
+      res.status(400).json({ error: error.message });
     }
   });
 
@@ -686,24 +879,34 @@ const FINE_RATE_PER_DAY = 1.50; // Configurable fine rate
 
   app.post('/api/borrow/return-approve/:id', authenticateToken, authorize(['librarian', 'admin']), async (req: any, res) => {
     try {
-      const record = await db.query.borrowRecords.findFirst({ where: eq(schema.borrowRecords.id, Number(req.params.id)) });
-      if (!record || record.status !== 'return_requested') return res.status(400).json({ error: 'Invalid record status' });
+      // Execute within a database transaction to prevent inventory synchronization or double-return anomalies
+      await db.transaction(async (tx) => {
+        // Fetch borrow record under current transaction context
+        const record = await tx.query.borrowRecords.findFirst({ where: eq(schema.borrowRecords.id, Number(req.params.id)) });
+        if (!record || record.status !== 'return_requested') throw new Error('Invalid record status');
 
-      const book = await db.query.books.findFirst({ where: eq(schema.books.id, record.bookId) });
-      if (book) {
-        await db.update(schema.books)
-          .set({ availableQuantity: Math.min(book.quantity, book.availableQuantity + 1) })
-          .where(eq(schema.books.id, book.id));
-      }
+        // Fetch corresponding physical catalog record
+        const book = await tx.query.books.findFirst({ where: eq(schema.books.id, record.bookId) });
+        if (book) {
+          // Increment book inventory and clamp it to total purchased library quantity
+          await tx.update(schema.books)
+            .set({ availableQuantity: Math.min(book.quantity, book.availableQuantity + 1) })
+            .where(eq(schema.books.id, book.id));
+        }
 
-      await db.update(schema.borrowRecords)
-        .set({ status: 'returned', returnDate: Date.now() as any })
-        .where(eq(schema.borrowRecords.id, record.id));
+        // Set status and timestamp the exact check-in date
+        await tx.update(schema.borrowRecords)
+          .set({ status: 'returned', returnDate: new Date() })
+          .where(eq(schema.borrowRecords.id, record.id));
 
-      await logAction(req.user.id, 'RETURN_APPROVE', `Approved return for ID: ${req.params.id}`);
+        // Log the return approval transaction for security and audit requirements
+        await logAction(req.user.id, 'RETURN_APPROVE', `Approved return for ID: ${req.params.id}`);
+      });
+
       res.json({ message: 'Return approved' });
     } catch (error: any) {
-      res.status(500).json({ error: error.message });
+      console.error('Return Approval failed under database transaction:', error);
+      res.status(400).json({ error: error.message });
     }
   });
 
@@ -754,10 +957,10 @@ const FINE_RATE_PER_DAY = 1.50; // Configurable fine rate
         updateData.password = await bcrypt.hash(req.body.password, 10);
       }
 
-      await db.update(schema.users)
+      const [user] = await db.update(schema.users)
         .set(updateData)
-        .where(eq(schema.users.id, userId));
-      const user = await db.query.users.findFirst({ where: eq(schema.users.id, userId) }) as any;
+        .where(eq(schema.users.id, userId))
+        .returning();
 
       if (user.role === 'student') {
         const existing = await db.query.students.findFirst({ where: eq(schema.students.userId, userId) });
@@ -787,10 +990,10 @@ const FINE_RATE_PER_DAY = 1.50; // Configurable fine rate
   app.put('/api/admin/users/:id/role', authenticateToken, authorize(['admin']), async (req: any, res) => {
     try {
       const { role } = req.body;
-      await db.update(schema.users)
+      const [user] = await db.update(schema.users)
         .set({ role })
-        .where(eq(schema.users.id, Number(req.params.id)));
-      const user = await db.query.users.findFirst({ where: eq(schema.users.id, Number(req.params.id)) }) as any;
+        .where(eq(schema.users.id, Number(req.params.id)))
+        .returning();
       
       await logAction(req.user.id, 'USER_ROLE_CHANGE', `Changed role of ${user.email} to ${role}`);
       res.json(user);
@@ -808,7 +1011,7 @@ const FINE_RATE_PER_DAY = 1.50; // Configurable fine rate
       await db.delete(schema.students).where(eq(schema.students.userId, id));
       await db.delete(schema.librarians).where(eq(schema.librarians.userId, id));
       
-      const user = await db.query.users.findFirst({ where: eq(schema.users.id, id) }) as any; await db.delete(schema.users).where(eq(schema.users.id, id));
+      const [user] = await db.delete(schema.users).where(eq(schema.users.id, id)).returning();
       
       await logAction(req.user.id, 'USER_DELETE', `Deleted user: ${user.email}`);
       res.json({ message: 'User deleted' });
@@ -817,25 +1020,28 @@ const FINE_RATE_PER_DAY = 1.50; // Configurable fine rate
     }
   });
 
-  // Reports / Dashboard
+  // ============================================================================
+  // ANALYTICS & DASHBOARD Reporting
+  // ============================================================================
+
   app.get('/api/dashboard/stats', authenticateToken, authorize(['librarian', 'admin']), async (req, res) => {
-    const totalBooks = (await poolConnection.query('SELECT SUM(quantity) as total FROM books'))[0][0] as any as any;
-    const totalUsers = (await poolConnection.query('SELECT COUNT(*) as total FROM users'))[0][0] as any as any;
-    const activeBorrows = (await poolConnection.query("SELECT COUNT(*) as total FROM borrow_records WHERE status IN ('borrowed', 'overdue')"))[0][0] as any as any;
-    const pendingRequests = (await poolConnection.query("SELECT COUNT(*) as total FROM borrow_records WHERE status = 'requested'"))[0][0] as any as any;
+    const totalBooks = await rawGet('SELECT SUM(quantity) as total FROM books') as any;
+    const totalUsers = await rawGet('SELECT COUNT(*) as total FROM users') as any;
+    const activeBorrows = await rawGet("SELECT COUNT(*) as total FROM borrow_records WHERE status IN ('borrowed', 'overdue')") as any;
+    const pendingRequests = await rawGet("SELECT COUNT(*) as total FROM borrow_records WHERE status = 'requested'") as any;
     
     // Status breakdown for charts
-    const statusStats = (await poolConnection.query("SELECT status, COUNT(*) as count FROM borrow_records GROUP BY status"))[0] as any;
+    const statusStats = await rawAll("SELECT status, COUNT(*) as count FROM borrow_records GROUP BY status");
     
-    const overdueCount = (await poolConnection.query("SELECT COUNT(*) as total FROM borrow_records WHERE status = 'overdue'"))[0][0] as any as any;
+    const overdueCount = await rawGet("SELECT COUNT(*) as total FROM borrow_records WHERE status = 'overdue'") as any;
     
     res.json({
       summary: {
-        totalBooks: totalBooks.total || 0,
-        totalUsers: totalUsers.total || 0,
-        activeBorrows: activeBorrows.total || 0,
-        pendingRequests: pendingRequests.total || 0,
-        overdueCount: overdueCount.total || 0
+        totalBooks: totalBooks?.total || 0,
+        totalUsers: totalUsers?.total || 0,
+        activeBorrows: activeBorrows?.total || 0,
+        pendingRequests: pendingRequests?.total || 0,
+        overdueCount: overdueCount?.total || 0
       },
       statusStats
     });
@@ -844,17 +1050,17 @@ const FINE_RATE_PER_DAY = 1.50; // Configurable fine rate
   app.get('/api/reports/detailed', authenticateToken, authorize(['librarian', 'admin']), async (req, res) => {
     try {
       // 1. Most Borrowed Books
-      const topBooks = (await poolConnection.query(`
+      const topBooks = await rawAll(`
         SELECT b.title, b.author, COUNT(br.record_id) as borrow_count 
         FROM borrow_records br
         JOIN books b ON br.book_id = b.book_id
         GROUP BY b.book_id
         ORDER BY borrow_count DESC
         LIMIT 10
-      `))[0] as any;
+      `);
 
       // 2. Most Borrowing Students
-      const topBorrowers = (await poolConnection.query(`
+      const topBorrowers = await rawAll(`
         SELECT u.full_name, u.email, COUNT(br.record_id) as borrow_count 
         FROM borrow_records br
         JOIN users u ON br.user_id = u.user_id
@@ -862,19 +1068,19 @@ const FINE_RATE_PER_DAY = 1.50; // Configurable fine rate
         GROUP BY u.user_id
         ORDER BY borrow_count DESC
         LIMIT 10
-      `))[0] as any;
+      `);
 
       // 3. Category Distribution (Books per category)
-      const categoryDistribution = (await poolConnection.query(`
+      const categoryDistribution = await rawAll(`
         SELECT c.category_name as name, COUNT(b.book_id) as value
         FROM categories c
         JOIN books b ON c.category_id = b.category_id
         GROUP BY c.category_id
         ORDER BY value DESC
-      `))[0] as any;
+      `);
 
       // 4. Overdue Hotspots (Users with most overdue items)
-      const overdueHotspots = (await poolConnection.query(`
+      const overdueHotspots = await rawAll(`
         SELECT u.full_name, COUNT(br.record_id) as overdue_count, SUM(br.fine_amount) as total_fines
         FROM borrow_records br
         JOIN users u ON br.user_id = u.user_id
@@ -882,7 +1088,7 @@ const FINE_RATE_PER_DAY = 1.50; // Configurable fine rate
         GROUP BY u.user_id
         ORDER BY overdue_count DESC
         LIMIT 5
-      `))[0] as any;
+      `);
 
       // 5. Recent Borrowing Activity (Detailed Log)
       const recentActivity = await db.select({
@@ -898,20 +1104,20 @@ const FINE_RATE_PER_DAY = 1.50; // Configurable fine rate
         .limit(20);
 
       // 6. Monthly Trends (Last 6 Months)
-      const monthlyTrends = (await poolConnection.query(`
+      const monthlyTrends = await rawAll(`
         WITH RECURSIVE months(m) AS (
-          SELECT DATE_SUB(DATE_FORMAT(NOW(), '%Y-%m-01'), INTERVAL 5 MONTH)
+          SELECT date('now', 'start of month', '-5 months')
           UNION ALL
-          SELECT DATE_ADD(m, INTERVAL 1 MONTH) FROM months WHERE m < DATE_FORMAT(NOW(), '%Y-%m-01')
+          SELECT date(m, '+1 month') FROM months WHERE m < date('now', 'start of month')
         )
         SELECT 
           strftime('%Y-%m', m) as month,
-          (SELECT COUNT(*) FROM borrow_records WHERE DATE_FORMAT(FROM_UNIXTIME(borrow_date/1000), '%Y-%m') = strftime('%Y-%m', m)) as borrow_count
+          (SELECT COUNT(*) FROM borrow_records WHERE strftime('%Y-%m', datetime(borrow_date/1000, 'unixepoch')) = strftime('%Y-%m', m)) as borrow_count
         FROM months
-      `))[0] as any;
+      `);
 
       // 7. Low Stock / Out of Stock Books
-      const stockStatus = (await poolConnection.query(`
+      const stockStatus = await rawAll(`
         SELECT 
           b.book_id,
           b.title,
@@ -922,7 +1128,7 @@ const FINE_RATE_PER_DAY = 1.50; // Configurable fine rate
         WHERE b.available_quantity <= 1
         ORDER BY b.available_quantity ASC, last_borrowed DESC
         LIMIT 20
-      `))[0] as any;
+      `);
 
       res.json({
         topBooks,
@@ -939,7 +1145,10 @@ const FINE_RATE_PER_DAY = 1.50; // Configurable fine rate
     }
   });
 
-  // Vite preview setup
+  // ============================================================================
+  // VITE & SUB-ROUTING (For Development and Production Fallback)
+  // ============================================================================
+
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },
