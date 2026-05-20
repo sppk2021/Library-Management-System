@@ -23,7 +23,8 @@ import * as schema from './src/db/librarydb.ts';
 // Fits perfectly with Candidate 200309's project proposal constraints
 // ============================================================================
 
-const useTurso = !!process.env.TURSO_CONNECTION_URL;
+const tursoUrl = process.env.TURSO_CONNECTION_URL || process.env.TURSO_DATABASE_URL;
+const useTurso = !!tursoUrl;
 let db: any;
 let sqlite: any;
 let libsqlClient: any;
@@ -31,7 +32,7 @@ let libsqlClient: any;
 if (useTurso) {
   console.log('Connecting to Cloud-Native Distributed relational database via Turso SQL API...');
   libsqlClient = createClient({
-    url: process.env.TURSO_CONNECTION_URL!,
+    url: tursoUrl!,
     authToken: process.env.TURSO_AUTH_TOKEN,
   });
   db = drizzleLibSql(libsqlClient, { schema });
