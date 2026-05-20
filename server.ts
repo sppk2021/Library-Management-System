@@ -14,7 +14,18 @@ import * as schema from './src/db/librarydb.ts';
 
 // On Vercel, the file system is read-only except for /tmp
 
-const poolConnection = mysql.createPool(process.env.DATABASE_URL || 'mysql://root:password@localhost:3306/library');
+let dbUrl = process.env.DATABASE_URL || 'mysql://root:password@localhost:3306/library';
+let connectionConfig: any = { uri: dbUrl };
+if (dbUrl.includes('ondigitalocean.com')) {
+  dbUrl = dbUrl.replace('?ssl-mode=REQUIRED', '');
+  connectionConfig = {
+    uri: dbUrl,
+    ssl: {
+      rejectUnauthorized: false
+    }
+  };
+}
+const poolConnection = mysql.createPool(connectionConfig);
 const db = drizzle(poolConnection, { schema, mode: 'default' });
 
 
