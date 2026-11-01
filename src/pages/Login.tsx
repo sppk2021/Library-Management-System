@@ -1,3 +1,15 @@
+/**
+ * LOGIN & SIGN-UP PAGE
+ * ----------------------------------------------------------------------------
+ * One form with two modes:
+ *   - Login:   sends email + password to POST /api/auth/login. The server replies with a
+ *              JWT token, which is saved (see useAuth().login) and sent with every later request.
+ *   - Sign up: sends the new member's details to POST /api/auth/register.
+ *
+ * SECURITY: public sign-up can only create STUDENT accounts. The server enforces this
+ * (whatever the browser sends). Librarian and admin accounts are created by an admin
+ * on the Admin → Members screen.
+ */
 import React, { useState } from 'react';
 import { motion } from 'motion/react';
 import { Library, Mail, Lock, User as UserIcon, Phone, Code, Building, GraduationCap } from 'lucide-react';
@@ -9,17 +21,18 @@ export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
-  const [role, setRole] = useState('student');
+  // Public sign-up is always a student account (see the security note at the top of this file)
+  const role = 'student';
   const [studentCode, setStudentCode] = useState('');
   const [department, setDepartment] = useState('');
   const [year, setYear] = useState('1');
-  const [employeeCode, setEmployeeCode] = useState('');
   const [phone, setPhone] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
   const { login } = useAuth();
 
+  /** Runs when the form is submitted: logs in or registers, depending on the current mode. */
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -31,9 +44,9 @@ export default function Login() {
         login(res.data.token, res.data.user);
       } else {
         await api.post('/auth/register', {
-          fullName, email, password, role,
+          fullName, email, password,
           studentCode, department, year: Number(year),
-          employeeCode, phone
+          phone
         });
         setIsLogin(true);
         setError('Registration successful! Please login.');
@@ -84,12 +97,12 @@ export default function Login() {
               </div>
               <div className="space-y-1.5">
                 <label className="text-[10px] font-black uppercase tracking-widest text-lms-blue ml-2">Access Role</label>
+                {/* Only "Academic Student" can be chosen here; staff accounts are created by an admin. */}
                 <select 
                   className="select-modern cursor-pointer"
-                  value={role} onChange={e => setRole(e.target.value)}
+                  value={role} onChange={() => {}}
                 >
                   <option value="student">Academic Student</option>
-                  <option value="librarian">Librarian Staff</option>
                 </select>
               </div>
               <div className="space-y-1.5">

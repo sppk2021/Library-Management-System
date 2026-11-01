@@ -1,167 +1,87 @@
-# Production Deployment Guide: centralLMS on Vercel with Direct Vercel-Turso Integration
+# Deployment Guide: Vercel + Aiven MySQL
 
-**Candidate Name:** Saw Pyae Phyo Kyaw  
-**Candidate ID:** 200309  
-**Module:** Information Systems Project (Unit: NCC Global Assignment)  
-**Academic Center:** KBTC College (KBT001)  
-**Date Reference:** Spring 2026
+**Candidate:** Saw Pyae Phyo Kyaw (200309) · **Module:** Information Systems Project
 
----
-
-## 1. Why a Direct Vercel-Turso Integration is Perfect for Your Project
-To comply with your approved **Relational Database** proposal, your **Physical Entity-Relationship Diagram (ERD)**, and your **Interim Report**'s core technical challenge (ACID transaction locks and concurrency), maintaining SQL architecture is essential.
-
-Using the official **Vercel-Turso Integration** lets you provision, manage, and connect your relational database **entirely from the Vercel dashboard**. You do not need to download command-line tools or copy-paste keys manually. Vercel automatically configures the database and injects the credentials (`TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`) directly into your project's Environment Variables.
-
-### Academic Highlights:
-1.  **Direct ERD Matching:** Turso uses the **LibSQL** database engine (an enterprise SQLite dialect). This maintains 100% consistency with the schemas (`users`, `students`, `librarians`, `books`, `borrow_records`) defined in your `/src/db/librarydb.ts` and shown on your physical ERD.
-2.  **Zero-Touch Provisioning:** The database is created directly from Vercel's interface, avoiding manual database connection management.
-3.  **Automatic Seeding:** Upon the first API call to the Vercel-deployed server, the system automatically detects the empty database, runs table creation scripts, and seeds your **Candidate Profile (Student Code: 200309)** along with 150+ academic catalog records.
-
----
-
-## 2. Step-by-Step Vercel & Turso Dashboard Setup
-
-### Step 2.1: Publish Code to GitHub
-1. Initialize Git in your project folder locally:
-   ```bash
-   git init
-   git add .
-   git commit -m "feat: enable dual-mode database with support for Vercel Turso Integration"
-   ```
-2. Create a private repository on [GitHub](https://github.com/) named `central-lms`.
-3. Connect your local folder and push:
-   ```bash
-   git remote add origin https://github.com/your-username/central-lms.git
-   git branch -M main
-   git push -u origin main
-   ```
-
-### Step 2.2: Import Your Project into Vercel
-1. Go to [https://vercel.com/](https://vercel.com) and log in with your GitHub account.
-2. Click **"Add New..."** -> **"Project"**.
-3. Import your `central-lms` repository from the list.
-4. Set the Framework Preset to **"Vite"** or keep it as **"Other"**.
-5. Set the Root Directory as `/`.
-6. Click the **"Deploy"** button to trigger the initial compilation. (Note: The first build will succeed, but database queries won't execute until we connect Turso in the next step).
-
----
-
-## 3. Creating & Linking Your Database via Vercel (No Manual Step)
-
-Once your project is compiled on Vercel, link your Turso relational database using Vercel’s native dashboard system:
+The live demo uses two free cloud services:
 
 ```
-[ Vercel Dashboard ] ──( 1. Add Integration )──> [ Search: Turso ]
-                                                            │
-[ Vercel Project Environment ] <──( 3. Auto-Injects Keys )── [ 2. Create Database ]
-  • TURSO_DATABASE_URL
-  • TURSO_AUTH_TOKEN
+ Browser ──HTTPS──> Vercel
+                     ├── Static files (React app, served from Vercel's global CDN)
+                     └── /api/*  → Serverless function (api/index.ts → server.ts, Node.js + Express)
+                                        │
+                                        │  MySQL protocol over TLS (encrypted)
+                                        ▼
+                                   Aiven for MySQL (MySQL 8, managed cloud database)
 ```
 
-### Step 3.1: Connect the Turso Integration
-1. In your project page on the **Vercel Dashboard**, go to the **"Integrations"** tab (or **"Storage"** tab).
-2. Click on **"Browse Marketplace"** or search directly for **"Turso"**.
-3. Click on the **"Turso"** integration icon, then click **"Add Integration"**.
-4. Select your Vercel account/scope and choose your `central-lms` project to link.
-5. Click **"Install"**.
+* **Vercel** hosts the website and runs the Express API as a *serverless function*: it starts when a request arrives and is not a server that runs all the time.
+* **Aiven** hosts the MySQL 8 database. The app connects with an encrypted connection.
+* Both should be in the **same region** (e.g. Singapore) so each database query is fast.
 
-### Step 3.2: Create the Database inside Vercel
-1. A secure popup authorize window will open, prompting you to log in to Turso (you can sign in in one click via your same GitHub account).
-2. Once authorized, Vercel will ask you:
-   * **Select Database:** Click **"Create New Database"**.
-   * **Database Name:** Name it something appropriate, e.g., `central-lms-db`.
-   * **Location:** Choose your preferred hosting location (e.g., Singapore `sin` or Tokyo `nrt` for low latency).
-3. Click **"Create & Connect"**.
-
-🚀 **And that's it!** Vercel's backend securely provisions the database on Turso's serverless edge and automatically injects `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` into your project's Environment Variables under Production, Preview, and Development scopes.
+> Free plans and their limits change over time. Check the current terms on both sites before relying on them for the demo.
 
 ---
 
-## 4. How to Restore/Upload Your Local SQLite Database (library.db) to Turso
+## 1. Create the MySQL database on Aiven
 
-If you have already accumulated transaction records, custom academic books, or student profiles in your local `library.db` during development, you can **migrate and restore the whole file directly to your Turso Cloud Database** in minutes. 
+1. Sign up at **https://console.aiven.io** (you can use your GitHub account).
+2. Click **Create service** → choose **MySQL** → choose the **Free** plan.
+3. Pick a cloud region close to your users (e.g. *Asia-Pacific / Singapore*) and click **Create service**.
+4. Wait until the status shows **Running** (a few minutes).
+5. On the service's **Overview** page, note:
+   * **Service URI**, which looks like:
+     `mysql://avnadmin:PASSWORD@mysql-xxxx.aivencloud.com:12345/defaultdb?ssl-mode=REQUIRED`
+   * **CA certificate**: click **Download** (file `ca.pem`).
 
-Because Turso is natively built on SQLite/LibSQL, it can consume your SQLite `.db` binaries directly with zero schema conversion.
-
-Choose one of the two straightforward restoration methods below:
-
-### Method A: Zero-Downtime CLI Re-Creation (Recommended & Easiest)
-This is the cleanest approach. It destroys the empty placeholder database and recreates a new cloud instance pre-populated with your exact local data file. Because you use the **same database name**, the Vercel connection keys remain 100% valid.
-
-1. **Install the Turso CLI** on your local machine:
-   * **macOS / Linux:**
-     ```bash
-     curl -sSfL https://get.turso.tech/install.sh | sh
-     ```
-   * **Windows (PowerShell):**
-     ```powershell
-     irm https://get.turso.tech/install.ps1 | iex
-     ```
-2. **Authenticate your CLI:**
-   ```bash
-   turso auth login
-   ```
-3. **Destroy the blank placeholder database** (created by the Vercel integration):
-   ```bash
-   turso db destroy central-lms-db
-   ```
-4. **Re-create it initialized directly from your local `library.db` file:**
-   Navigate to the directory containing your local `library.db` and run:
-   ```bash
-   turso db create central-lms-db --from-file library.db
-   ```
-   *(Turso will read your entire database structure, indexes, keys, and row records, uploading them to the cloud in one atomic step!)*
+You don't need to create any tables. The app creates them, plus the demo data, the first time it connects.
 
 ---
 
-### Method B: SQL Restore Dump (For Existing/Active Databases)
-If you prefer not to delete your database client instance, you can export your local database state as a raw SQL script and pipe it directly to your live Turso shell.
+## 2. Connect Vercel to the database
 
-1. **Generate a clean SQL script dump** from your local `library.db`:
-   ```bash
-   sqlite3 library.db .dump > restore_db.sql
-   ```
-2. **Execute the dump script directly over the Turso Cloud shell:**
-   ```bash
-   turso db shell central-lms-db < restore_db.sql
-   ```
-3. Your Turso instance will execute the standard schema instructions, inserting your exact local tables and historical transaction values directly into the cloud.
+1. Go to **https://vercel.com** → your project → **Settings → Environment Variables**.
+2. **Delete the old Turso variables** if they exist (`TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, `TURSO_CONNECTION_URL`), and remove the Turso integration under **Integrations**. They are no longer used.
+3. Add these variables (for **Production**, **Preview** and **Development**):
 
----
+| Name | Value |
+|---|---|
+| `DATABASE_URL` | The Aiven **Service URI** from step 1 |
+| `DB_SSL_CA` | Open `ca.pem` in a text editor and paste its **entire** content (including the `-----BEGIN CERTIFICATE-----` lines) |
+| `JWT_SECRET` | A long random text. Generate one with: `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"` |
+| `NODE_ENV` | `production` |
 
-## 5. Finalizing Environment Variables & Deploying
+4. Go to **Deployments** → on the latest deployment click **⋯ → Redeploy** (or just push a new commit to GitHub).
 
-To complete the setup, configure your other secure parameters (like JWT encryption keys):
-
-### Step 5.1: Add JWT Secret to Vercel
-1. Go to your **Vercel Project Settings** -> **"Environment Variables"** tab.
-2. Add the following key-value pairs:
-
-| Key | Value | Notes |
-| :--- | :--- | :--- |
-| `NODE_ENV` | `production` | Enforces production routing and static UI serving |
-| `JWT_SECRET` | `your_custom_secure_secret_string_here` | Enforces strong stateless JWT validation for Student profiles |
-
-3. Click **"Save"**.
-
-### Step 5.2: Redeploy!
-1. Go to the **"Deployments"** tab at the top of your Vercel project panel.
-2. Click on your latest deployment's triple-dot menu (`...`) and click **"Redeploy"** (or trigger a new git push).
-3. Once compiled, your system is fully live with dynamic edge SQL storage!
+**Why `DB_SSL_CA`?** With the certificate, the app checks that it's really talking to *your* Aiven server, which protects against man-in-the-middle attacks. Without it, the connection is still encrypted, but the server's identity isn't verified, and the app logs a warning.
 
 ---
 
-## 6. First-Load Auto-Initialization & Verification
+## 3. Check that it works
 
-Open your live Vercel URL (e.g. `https://central-lms.vercel.app`) and verify the setup:
+1. Open your Vercel URL. The first page load can take a few seconds while the database is created and filled.
+2. Log in as `admin@library.edu` / `admin123`. The dashboard should show 150 books.
+3. Optional: in Vercel → **Logs**, you should see `DATABASE: ready.`
+4. Optional: connect to Aiven with **MySQL Workbench** (or the `mysql` command line) using the same host, port, user and password to look at the tables.
 
-1. **Auto-seeding check:** When the first page request hits your server, the backend detects that the Turso DB tables are vacant. It automatically run SQL scripts to construct the tables and seed your **Candidate Profile (Student Code: 200309)** and 150+ academic books.
-2. **Log In:** Use your default student credentials:
-   * **Email:** `saw@student.edu`
-   * **Password:** `password123`
-3. **Verify Candidate Code:** Click on your profile avatar in the navigation bar to review the student data retrieved from the database:
-   * **Department:** Cybersecurity  
-   * **Candidate Code:** `200309`  
-   * **Academic Year:** 3  
-4. **Acquire/Borrow a physical copy:** Select any book in the list and request to borrow it. The system locks down the request and decrements shelf stock under an ACID-compliant database transaction!
+---
+
+## 4. Back up and restore
+
+* **Backup:** log in as admin → **Admin → Database Dump → Download**. This saves `library_backup_YYYY-MM-DD.sql`.
+* **Restore into XAMPP:** phpMyAdmin → select `library_db` → **Import** → choose the file.
+* **Restore into Aiven:**
+  ```bash
+  mysql --host=HOST --port=PORT --user=avnadmin --password --ssl-mode=REQUIRED defaultdb < library_backup.sql
+  ```
+* Aiven also takes its own automatic backups of the service. See the **Backups** tab in the Aiven console for what your plan includes.
+
+---
+
+## 5. Common problems
+
+| Symptom (in Vercel logs) | Cause / fix |
+|---|---|
+| `ECONNREFUSED` or `ETIMEDOUT` | `DATABASE_URL` is wrong, or the Aiven service is powered off. Check that its status is **Running**. |
+| `Access denied for user 'avnadmin'` | The password in `DATABASE_URL` is wrong. Copy the Service URI again. |
+| `self-signed certificate in certificate chain` | `DB_SSL_CA` is incomplete. Paste the whole `ca.pem` again. |
+| Logins stop working after a redeploy | `JWT_SECRET` changed, which invalidates old tokens. Log in again. |

@@ -1,12 +1,23 @@
+/**
+ * SYSTEM ADMINISTRATION PAGE (admin only)
+ * ----------------------------------------------------------------------------
+ * Three tabs:
+ *   1. Membership:    list, search, add ("Enroll"), edit and delete members of any role.
+ *                     New accounts go to POST /api/admin/users (admin-only), the only
+ *                     way to create librarian or admin accounts.
+ *   2. Database Dump: downloads a full MySQL backup (.sql) and explains how to restore it.
+ *   3. Settings:      library rules (loan days, fine rate, loan limit); see components/LibrarySettings.tsx.
+ */
 import React, { useState, useEffect } from 'react';
-import { Users, Search, UserMinus, Edit3, Plus, X, User as UserIcon, Database, Download } from 'lucide-react';
+import { Users, Search, UserMinus, Edit3, Plus, X, User as UserIcon, Database, Download, Settings } from 'lucide-react';
 import api from '../lib/api';
 import { User as UserType } from '../types';
 import { motion, AnimatePresence } from 'motion/react';
+import LibrarySettings from '../components/LibrarySettings';
 
 export default function AdminManagement() {
   const [users, setUsers] = useState<UserType[]>([]);
-  const [activeTab, setActiveTab] = useState<'users' | 'database'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'database' | 'settings'>('users');
   const [downloading, setDownloading] = useState(false);
   const [search, setSearch] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
@@ -21,6 +32,7 @@ export default function AdminManagement() {
     fetchUsers();
   }, []);
 
+  /** Loads the member list from the server. */
   const fetchUsers = async () => {
     const res = await api.get('/admin/users');
     setUsers(res.data);
@@ -32,6 +44,7 @@ export default function AdminManagement() {
     u.role.toLowerCase().includes(search.toLowerCase())
   );
 
+  /** Saves the Enroll/Edit form: updates an existing member, or creates a new one. */
   const handleAddUser = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -39,7 +52,8 @@ export default function AdminManagement() {
       if (editingUserId) {
         await api.put(`/admin/users/${editingUserId}`, newUser);
       } else {
-        await api.post('/auth/register', newUser);
+        // Admin-only route: allows any role (public sign-up can only create students)
+        await api.post('/admin/users', newUser);
       }
       setShowAddModal(false);
       setEditingUserId(null);
@@ -146,15 +160,27 @@ export default function AdminManagement() {
     </div>
   );
 
-  const handleDownloadBackup = () => {
+  /**
+   * Downloads the MySQL backup file.
+   * The request goes through our `api` helper so the login token is attached.
+   * (Bug fix: the old version used window.location, which sends no token → 401 error.)
+   * The file arrives as a "blob" (raw file data); we then make a temporary link and click it.
+   */
+  const handleDownloadBackup = async () => {
     setDownloading(true);
     try {
-      // Direct browser window download trigger targeting our newly compiled relational SQLite endpoint
-      window.location.href = '/api/admin/database-dump';
+      const res = await api.get('/admin/database-dump', { responseType: 'blob' });
+      const fileName = `library_backup_${new Date().toISOString().slice(0, 10)}.sql`;
+      const url = URL.createObjectURL(res.data);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      link.click();
+      URL.revokeObjectURL(url);
     } catch (err: any) {
       alert('Failed to retrieve server dump');
     } finally {
-      setTimeout(() => setDownloading(false), 2000);
+      setDownloading(false);
     }
   };
 
@@ -168,12 +194,12 @@ export default function AdminManagement() {
               <Database size={32} />
             </div>
             <div>
-              <h3 className="text-2xl font-serif italic text-[#141414] leading-tight">Turso Relational SQL Export</h3>
-              <p className="text-gray-400 text-[10px] font-bold uppercase tracking-wider mt-1">Ready-compiled restore script for Vercel & Turso DB</p>
+              <h3 className="text-2xl font-serif italic text-[#141414] leading-tight">MySQL Relational SQL Export</h3>
+              <p className="text-gray-400 text-[10px] font-bold uppercase tracking-wider mt-1">Ready-to-restore script for MySQL / phpMyAdmin</p>
             </div>
 
             <p className="text-[#141414bc] text-xs font-semibold leading-relaxed">
-              This system compiles all your physical local SQLite table registers—including profiles, book listings, categorizations, and borrow chronicles—into a single atomic, transaction-wrapped SQL migration script.
+              This system exports every MySQL table—including profiles, book listings, categorizations, and borrow chronicles—into a single SQL script that rebuilds the complete database.
             </p>
 
             <button
@@ -183,26 +209,26 @@ export default function AdminManagement() {
               className="w-full flex items-center justify-center gap-2.5 py-4 bg-[#141414] hover:bg-[#5A5A40] text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:scale-[1.01] active:scale-95 transition-all shadow-xl shadow-[#14141410] disabled:opacity-50 cursor-pointer"
             >
               <Download size={14} />
-              {downloading ? 'Compiling Dump...' : 'Download ready-to-restore.sql'}
+              {downloading ? 'Compiling Dump...' : 'Download library_backup.sql'}
             </button>
           </div>
 
           <div className="card-modern p-6 bg-[#F8F8F5] border border-[#14141408] rounded-[2rem] space-y-4">
             <div className="flex items-center gap-3">
               <span className="w-2.5 h-2.5 bg-green-500 rounded-full animate-pulse" />
-              <div className="text-[9px] text-gray-500 font-black uppercase tracking-widest">Local Database Engine Online</div>
+              <div className="text-[9px] text-gray-500 font-black uppercase tracking-widest">MySQL Database Engine Online</div>
             </div>
             <p className="text-[11px] text-[#1414148a] font-black leading-relaxed">
-              The internal relational schema file <code className="bg-white px-1.5 py-0.5 border border-black/5 rounded font-mono text-[9px] text-green-700">library.db</code> is actively synchronized. Any student portfolios, catalog enhancements, or transactions added are compiled immediately!
+              The backup is generated live from the <code className="bg-white px-1.5 py-0.5 border border-black/5 rounded font-mono text-[9px] text-green-700">library_db</code> MySQL database, so it always includes the latest members, catalog changes and transactions.
             </p>
           </div>
         </div>
 
-        {/* Right column: Interactive commands list & Turso guide */}
+        {/* Right column: how to restore the backup in phpMyAdmin or the MySQL command line */}
         <div className="lg:col-span-7 card-modern p-10 bg-white border border-[#14141408] rounded-[2.5rem] shadow-sm space-y-8">
           <div>
             <div className="text-[9px] text-[#5A5A40] font-black uppercase tracking-[0.2em] mb-1">Restoration Workflow</div>
-            <h3 className="text-2xl font-serif italic text-[#141414]">Re-loading Backup on Turso Serverless</h3>
+            <h3 className="text-2xl font-serif italic text-[#141414]">Restoring a Backup into MySQL</h3>
           </div>
 
           <div className="space-y-6">
@@ -210,17 +236,17 @@ export default function AdminManagement() {
               <span className="flex items-center justify-center w-6 h-6 rounded-full bg-gray-50 text-[10px] font-black font-mono border border-gray-100 text-[#5A5A40] shrink-0">1</span>
               <div>
                 <h4 className="text-xs font-black text-[#141414] uppercase tracking-wide">Acquire Backup File</h4>
-                <p className="text-xs text-gray-400 font-medium leading-relaxed mt-0.5">Click the dark download button on the left to extract the precompiled script <code className="bg-[#F8F8F5] px-1 py-0.5 rounded text-[10px] font-mono text-[#5A5A40]">restore_database.sql</code>.</p>
+                <p className="text-xs text-gray-400 font-medium leading-relaxed mt-0.5">Click the dark download button on the left to extract the precompiled script <code className="bg-[#F8F8F5] px-1 py-0.5 rounded text-[10px] font-mono text-[#5A5A40]">library_backup.sql</code>.</p>
               </div>
             </div>
 
             <div className="flex gap-4">
               <span className="flex items-center justify-center w-6 h-6 rounded-full bg-gray-50 text-[10px] font-black font-mono border border-gray-100 text-[#5A5A40] shrink-0">2</span>
               <div>
-                <h4 className="text-xs font-black text-[#141414] uppercase tracking-wide font-medium">Verify Turso CLI Session</h4>
-                <p className="text-xs text-gray-400 font-medium leading-relaxed mt-0.5">Ensure you are logged into your Turso developer console on your local workstation's shell:</p>
+                <h4 className="text-xs font-black text-[#141414] uppercase tracking-wide font-medium">Option A: phpMyAdmin (XAMPP)</h4>
+                <p className="text-xs text-gray-400 font-medium leading-relaxed mt-0.5">Open phpMyAdmin, select the database, then use the Import tab:</p>
                 <pre className="p-3 bg-[#F8F8F5] border border-gray-100 rounded-xl text-[10px] font-mono text-gray-600 mt-2">
-                  turso auth login
+                  http://localhost/phpmyadmin → library_db → Import → Choose file → Import
                 </pre>
               </div>
             </div>
@@ -228,14 +254,11 @@ export default function AdminManagement() {
             <div className="flex gap-4">
               <span className="flex items-center justify-center w-6 h-6 rounded-full bg-gray-50 text-[10px] font-black font-mono border border-gray-100 text-[#5A5A40] shrink-0">3</span>
               <div>
-                <h4 className="text-xs font-black text-[#141414] uppercase tracking-wide font-medium">Perform Shell Pipe Restoration</h4>
-                <p className="text-xs text-gray-400 font-medium leading-relaxed mt-0.5 font-medium leading-relaxed">Simply pipe the generated backup script directly to your cloud project shell instance to load the structure atomic-wide:</p>
+                <h4 className="text-xs font-black text-[#141414] uppercase tracking-wide font-medium">Option B: MySQL Command Line</h4>
+                <p className="text-xs text-gray-400 font-medium leading-relaxed mt-0.5 font-medium leading-relaxed">Run the script against any MySQL server, local or cloud (e.g. Aiven):</p>
                 <pre className="p-3 bg-[#F8F8F5] border border-gray-100 rounded-xl text-[9px] font-mono text-gray-600 mt-2 leading-relaxed">
-                  # Step 3.1: Reset existing blank tables<br />
-                  turso db destroy central-lms-db<br />
-                  <br />
-                  # Step 3.2: Recreate and load structures cleanly in one command!<br />
-                  turso db create central-lms-db --from-file restore_database.sql
+                  # Tables are dropped and recreated, then all rows are re-inserted<br />
+                  mysql -u root -p library_db &lt; library_backup.sql
                 </pre>
               </div>
             </div>
@@ -259,6 +282,7 @@ export default function AdminManagement() {
           <div className="flex bg-white p-1.5 rounded-2xl border border-[#14141408] shadow-sm overflow-x-auto no-scrollbar max-w-full">
             <TabButton active={activeTab === 'users'} onClick={() => setActiveTab('users')} icon={<Users size={14} />} label="Membership" />
             <TabButton active={activeTab === 'database'} onClick={() => setActiveTab('database')} icon={<Database size={14} />} label="Database Dump" />
+            <TabButton active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} icon={<Settings size={14} />} label="Settings" />
           </div>
           {activeTab === 'users' && (
             <button 
@@ -280,6 +304,7 @@ export default function AdminManagement() {
         >
           {activeTab === 'users' && renderMembership()}
           {activeTab === 'database' && renderDatabaseBackup()}
+          {activeTab === 'settings' && <LibrarySettings />}
         </motion.div>
       </AnimatePresence>
 

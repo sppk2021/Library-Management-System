@@ -1,3 +1,8 @@
+/**
+ * NAVIGATION BAR
+ * Shows only the links the current role may use, plus the logout button.
+ * Logging out deletes the token from the browser (see logout() in App.tsx).
+ */
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../App';
 import { Book, History, LayoutDashboard, LogOut, Settings, Users, Library } from 'lucide-react';
@@ -7,6 +12,7 @@ export default function Navbar() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
+  /** Logs out and returns to the login page. */
   const handleLogout = () => {
     logout();
     navigate('/login');

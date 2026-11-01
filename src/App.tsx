@@ -1,3 +1,14 @@
+/**
+ * APP SHELL: login state + page routing
+ * ----------------------------------------------------------------------------
+ *  - AuthContext keeps "who is logged in" available to every page (via useAuth()).
+ *  - On start-up, if a token is saved in localStorage, GET /api/auth/me checks it is still valid.
+ *  - <Routes> maps each URL to a page. <PrivateRoute> sends visitors who are not logged in
+ *    to /login, and hides pages from roles that may not see them
+ *    (e.g. /admin is admin-only, /manage-books is librarian + admin).
+ *  NOTE: hiding pages here is only for convenience. The real protection is on the
+ *  server (authenticateToken + authorize in server.ts), which checks every API request.
+ */
 import React, { useState, useEffect, createContext, useContext } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';

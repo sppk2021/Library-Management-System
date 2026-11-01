@@ -1,3 +1,12 @@
+/**
+ * BORROW HISTORY / CIRCULATION PAGE
+ * ----------------------------------------------------------------------------
+ * Data: GET /api/borrow/history (students get their own loans; staff get all loans).
+ * Buttons call POST /api/borrow/<action>/<id>, depending on role and loan status:
+ *   - librarian/admin: approve, reject, return-approve, pay-fine (only after return)
+ *   - student:         return-request ("Drop")
+ * Search, sorting and paging happen in the browser (useMemo) without extra server calls.
+ */
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../App';
 import { 
@@ -29,6 +38,7 @@ export default function BorrowHistory() {
     fetchHistory();
   }, []);
 
+  /** Loads the loan list from the server (fines are refreshed there first). */
   const fetchHistory = async () => {
     setLoading(true);
     try {
@@ -41,6 +51,7 @@ export default function BorrowHistory() {
     }
   };
 
+  /** Sends one workflow action (approve, reject, return-request, return-approve, pay-fine), then reloads the list. */
   const handleAction = async (action: string, id: number) => {
     try {
       await api.post(`/borrow/${action}/${id}`);
@@ -295,7 +306,8 @@ export default function BorrowHistory() {
                             </button>
                           </div>
                         )}
-                        {user?.role !== 'student' && record.fineAmount && record.fineAmount > 0 && (
+                        {/* Fines can be settled once the book is back (status 'returned'); see /api/borrow/pay-fine */}
+                        {user?.role !== 'student' && record.status === 'returned' && (record.fineAmount ?? 0) > 0 && (
                           <button 
                             onClick={() => handleAction('pay-fine', record.id)}
                             className="h-8 px-3 bg-red-600 text-white text-[10px] font-bold uppercase rounded-lg hover:bg-red-700 shadow-sm transform active:scale-95 transition-all"

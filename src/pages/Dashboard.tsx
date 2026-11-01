@@ -1,3 +1,9 @@
+/**
+ * DASHBOARD PAGE (home page after login)
+ * Students see quick links to the catalogue and their loans; librarians and admins
+ * see the analytics workspace (statistics and charts from /api/dashboard/stats and
+ * /api/reports/detailed).
+ */
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../App';
 import { Book, Users, Clock, AlertTriangle, ArrowRight, User as UserIcon, GraduationCap } from 'lucide-react';

@@ -1,3 +1,9 @@
+/**
+ * ANALYTICS WORKSPACE (librarian + admin dashboard)
+ * Loads the summary numbers (/api/dashboard/stats) and the detailed reports
+ * (/api/reports/detailed), then draws them with Recharts: monthly loan trend, category
+ * split, most-borrowed books, top readers, overdue members, recent activity and low stock.
+ */
 import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, AreaChart, Area } from 'recharts';
 import { TrendingUp, Users, Book, Clock, AlertTriangle, RefreshCw, FileDown, Trophy, Activity, Hash, Layers, AlertCircle } from 'lucide-react';
@@ -14,6 +20,7 @@ export default function AnalyticsWorkspace() {
     fetchStats();
   }, []);
 
+  /** Loads summary statistics and detailed reports at the same time. */
   const fetchStats = async () => {
     try {
       const [resStats, resDetailed] = await Promise.all([

@@ -1,3 +1,13 @@
+/**
+ * MANAGE BOOKS PAGE (librarian + admin)
+ * ----------------------------------------------------------------------------
+ * Catalogue management:
+ *   - add a book       → POST   /api/books
+ *   - edit a book      → PUT    /api/books/:id
+ *   - delete a book    → DELETE /api/books/:id  (refused while copies are on loan)
+ *   - add a category   → POST   /api/categories
+ * Search, filtering, sorting and paging happen in the browser (useMemo).
+ */
 import React, { useState, useEffect, useMemo } from 'react';
 import { Plus, Edit2, Trash2, Library, Tag, Search, X, Check, ChevronLeft, ChevronRight, ArrowUpDown, ArrowUp, ArrowDown, Filter, AlertCircle, Loader2, Code2, Copy } from 'lucide-react';
 import api from '../lib/api';
@@ -58,6 +68,7 @@ export default function LibrarianBooks() {
     fetchData();
   }, []);
 
+  /** Loads books and categories at the same time (Promise.all). */
   const fetchData = async () => {
     setLoading(true);
     try {
@@ -74,6 +85,7 @@ export default function LibrarianBooks() {
     }
   };
 
+  /** Saves the book form: PUT when editing an existing book, POST when adding a new one. */
   const handleSaveBook = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -94,6 +106,7 @@ export default function LibrarianBooks() {
     }
   };
 
+  /** Deletes a book after confirmation. The server refuses if copies are still on loan. */
   const handleDeleteBook = async (id: number) => {
     if (confirm('Are you sure you want to delete this book?')) {
       try {
@@ -105,6 +118,7 @@ export default function LibrarianBooks() {
     }
   };
 
+  /** Creates a new subject category. */
   const handleAddCategory = async () => {
     if (!newCategory) return;
     try {

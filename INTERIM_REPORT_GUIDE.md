@@ -1,3 +1,5 @@
+> **⚠ Outdated (November 2026):** this guide was written when the app used SQLite/Turso. The app now uses **MySQL** (XAMPP locally, Aiven in the cloud), as planned in the proposal. For the current design see `ARCHITECTURE.md`, `DEPLOYMENT_GUIDE.md` and `docs/PROJECT_REVIEW.md`. Do not copy text from this file into the final report: write the report in your own words.
+
 # Level 6 Information Systems Project: Interim Report Guide
 **Candidate Name:** Saw Pyae Phyo Kyaw  
 **Candidate ID:** 200309  

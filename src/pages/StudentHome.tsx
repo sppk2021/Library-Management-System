@@ -1,3 +1,10 @@
+/**
+ * BOOK CATALOGUE PAGE (students)
+ * ----------------------------------------------------------------------------
+ * Loads all books and categories (GET /api/books, GET /api/categories), and lets the
+ * student search, filter, sort and request a loan (POST /api/borrow/request).
+ * Books with no copies left show the date the next copy is expected back.
+ */
 import React, { useState, useEffect, useMemo } from 'react';
 import { Search, Filter, BookIcon, AlertCircle, CheckCircle2, ShoppingCart, ChevronLeft, ChevronRight, Grid, List as ListIcon, Loader2, ArrowUpDown, ArrowUp, ArrowDown, Clock } from 'lucide-react';
 import api from '../lib/api';
@@ -28,6 +35,7 @@ export default function StudentHome() {
     fetchData();
   }, []); // Only fetch once, handle filtering/sorting client-side for smooth interaction with 100+ items
 
+  /** Loads books and categories at the same time (Promise.all). */
   const fetchData = async () => {
     setLoading(true);
     try {
@@ -44,6 +52,7 @@ export default function StudentHome() {
     }
   };
 
+  /** Sends a loan request; a librarian must then approve it on the circulation page. */
   const requestBorrow = async (bookId: number) => {
     try {
       await api.post('/borrow/request', { bookId });

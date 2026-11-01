@@ -1,3 +1,8 @@
+/**
+ * PROFILE PAGE
+ * Lets the logged-in user update their own name, phone and profile details
+ * (PUT /api/auth/profile), then reloads their data with GET /api/auth/me.
+ */
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../App';
 import { User, Mail, Phone, Code, Building, GraduationCap, Save, CheckCircle } from 'lucide-react';
@@ -30,6 +35,7 @@ export default function Profile() {
     }
   }, [authUser]);
 
+  /** Saves the profile, then reloads the user so the navbar etc. show the new details. */
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
